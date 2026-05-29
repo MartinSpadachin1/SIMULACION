@@ -1,16 +1,166 @@
 import { useCallback, useMemo, useState } from 'react'
 import './App.css'
 
-// Genera un número aleatorio exponencial usando transformada inversa.
+const INFINITO = Infinity
+
+// Posiciones fijas del vector de estado. La parte de lotes se agrega al final
+// porque crece o se achica segun los lotes temporales que sigan dentro del sistema.
+const COL = Object.freeze({
+  EVENTO: 0,
+  RELOJ: 1,
+  RND_EXPRESS: 2,
+  TIEMPO_EXPRESS: 3,
+  PROX_EXPRESS: 4,
+  RND_ESTANDAR: 5,
+  TIEMPO_ESTANDAR: 6,
+  PROX_ESTANDAR: 7,
+  RND_DESCARGA: 8,
+  TIEMPO_DESCARGA: 9,
+  FIN_DESCARGA_CINTA_1: 10,
+  FIN_DESCARGA_CINTA_2: 11,
+  ESTADO_CINTA_1: 12,
+  ESTADO_CINTA_2: 13,
+  COLA_DESCARGA: 14,
+  RND_LECTURA: 15,
+  RESULTADO_LECTURA: 16,
+  ESTADO_ESCANER: 17,
+  COLA_ESCANER: 18,
+  RND_ESCANEO: 19,
+  TIEMPO_ESCANEO: 20,
+  FIN_ESCANEO: 21,
+  RND_MANUAL: 22,
+  TIEMPO_MANUAL: 23,
+  FIN_MANUAL: 24,
+  ESTADO_OPERARIO: 25,
+  COLA_MANUAL: 26,
+  CONT_EXPRESS: 27,
+  AC_EXPRESS: 28,
+  CONT_ESTANDAR: 29,
+  AC_ESTANDAR: 30,
+  AC_TIEMPO_OPERARIO: 31,
+  MAX_COLA_DESCARGA: 32,
+})
+
+const CANT_COLUMNAS_FIJAS = 33
+
+const COLUMNAS_VECTOR = [
+  'Evento',
+  'Reloj',
+  'RND',
+  'tiempo',
+  'proxima',
+  'RND',
+  'tiempo',
+  'proxima',
+  'RND',
+  'tiempo',
+  'fin_descarga_cinta-1',
+  'fin_descarga_cinta-2',
+  'Estado',
+  'Estado',
+  'Cola',
+  'RND',
+  'Resultado',
+  'Estado',
+  'Cola',
+  'RND',
+  'Tiempo',
+  'fin_escaneo',
+  'RND',
+  'Tiempo',
+  'fin_procesamiento_manual',
+  'Estado',
+  'Cola',
+  'Cont.',
+  'Ac.',
+  'Cont.',
+  'Ac.',
+  'Ac. Tiempo ocupado',
+  'Cant Max.',
+]
+
+const GRUPOS_VECTOR = [
+  { label: '', span: 2 },
+  { label: 'llegada_camioneta_express', span: 3 },
+  { label: 'llegada_camioneta_estandar', span: 3 },
+  { label: 'fin_descarga_inicial(i)', span: 4 },
+  { label: 'Cinta descarga', span: 3 },
+  { label: 'Lectura', span: 4 },
+  { label: 'Escaner', span: 3 },
+  { label: 'fin_procesamiento_manual', span: 3 },
+  { label: 'Operario', span: 2 },
+  { label: '1.', span: 2 },
+  { label: '2.', span: 2 },
+  { label: '3.', span: 1 },
+  { label: '', span: 1 },
+]
+
+const COLUMNAS_TRANSITORIAS = [
+  COL.RND_EXPRESS,
+  COL.TIEMPO_EXPRESS,
+  COL.RND_ESTANDAR,
+  COL.TIEMPO_ESTANDAR,
+  COL.RND_DESCARGA,
+  COL.TIEMPO_DESCARGA,
+  COL.RND_LECTURA,
+  COL.RESULTADO_LECTURA,
+  COL.RND_ESCANEO,
+  COL.TIEMPO_ESCANEO,
+  COL.RND_MANUAL,
+  COL.TIEMPO_MANUAL,
+]
+
+function limpiarProbabilidad(valor) {
+  return Math.min(1, Math.max(0, Number.isFinite(valor) ? valor : 0))
+}
+
 function aleatorioExponencial(media) {
-  const r = Math.random()
+  const rnd = Math.random()
   return {
-    r,
-    val: -media * Math.log(Math.max(r, 1e-10)),
+    rnd,
+    tiempo: -media * Math.log(1 - rnd),
   }
 }
 
-// Ejecuta la simulación de eventos discretos para el sistema.
+function aleatorioUniforme(min, max) {
+  const rnd = Math.random()
+  return {
+    rnd,
+    tiempo: min + rnd * (max - min),
+  }
+}
+
+function crearServidor() {
+  return {
+    estado: 'Libre',
+    fin: null,
+    loteId: null,
+    inicioOcupacion: null,
+  }
+}
+
+function crearFilaVacia() {
+  return Array(CANT_COLUMNAS_FIJAS).fill('')
+}
+
+function prepararFilaDesdeAnterior(filaAnterior) {
+  const fila = filaAnterior.slice(0, CANT_COLUMNAS_FIJAS)
+  COLUMNAS_TRANSITORIAS.forEach((columna) => {
+    fila[columna] = ''
+  })
+  return fila
+}
+
+function tiempoEvento(valor) {
+  return valor === null || valor === undefined ? INFINITO : valor
+}
+
+function formatearNumero(valor) {
+  if (valor === null || valor === undefined || valor === '') return '-'
+  if (typeof valor === 'number') return Number.isFinite(valor) ? valor.toFixed(2) : '-'
+  return String(valor)
+}
+
 function simular(parametros) {
   const {
     tiempoMax,
@@ -26,459 +176,360 @@ function simular(parametros) {
     pRechazo,
   } = parametros
 
-  const cinta1 = { estado: 'LIBRE', finEn: Infinity, loteId: null }
-  const cinta2 = { estado: 'LIBRE', finEn: Infinity, loteId: null }
-  const escaner = { estado: 'LIBRE', finEn: Infinity, loteId: null }
-  const operario = { estado: 'LIBRE', finEn: Infinity, loteId: null }
+  const limiteIteraciones = Math.min(Math.max(0, maxIter), 100000)
+  const probabilidadRechazo = limpiarProbabilidad(pRechazo)
+  const probabilidadAceptacion = 1 - probabilidadRechazo
+  const minManual = Math.max(0.1, manualBase - manualVar)
+  const maxManual = Math.max(minManual, manualBase + manualVar)
 
-  const colaCintas = []
-  const colaEscaner = []
-  const colaManual = []
-  const lotes = {}
+  // Estado permanente del sistema: recursos, colas, acumuladores y lotes activos.
+  const sistema = {
+    reloj: 0,
+    proximaExpress: null,
+    proximaEstandar: null,
+    cinta1: crearServidor(),
+    cinta2: crearServidor(),
+    escaner: crearServidor(),
+    operario: crearServidor(),
+    colaDescarga: [],
+    colaEscaner: [],
+    colaManual: [],
+    lotesActivos: new Map(),
+    proximoLoteId: 1,
+    totalExpressIngresados: 0,
+    totalEstandarIngresados: 0,
+    contExpressTerminados: 0,
+    contEstandarTerminados: 0,
+    acTiempoExpress: 0,
+    acTiempoEstandar: 0,
+    acTiempoOperario: 0,
+    maxColaDescarga: 0,
+  }
 
-  let contadorLotes = 0
-  let proximaLlegadaExpress = null
-  let proximaLlegadaEstandar = null
-  let contadorExpress = 0
-  let contadorEstandar = 0
-  let acumuladoTiempoOperario = 0
-  let maxColaCintas = 0
-  let sumaTiempoExpress = 0
-  let sumaTiempoEstandar = 0
-  let lotesSalidaExpress = 0
-  let lotesSalidaEstandar = 0
-  let reloj = 0
+  // El vector de estado que se usa para calcular tiene siempre dos filas:
+  // posicion 0 = fila anterior, posicion 1 = fila actual.
+  const vectorEstado = [crearFilaVacia(), crearFilaVacia()]
+  const filasGuardadas = []
   let iteracion = 0
-  let filaRnd = {}
-  const filas = []
 
-  function construirFilaDetalleLote() {
-    const detalle = {}
-    for (let i = 1; i <= contadorLotes; i += 1) {
-      const lote = lotes[i]
-      if (!lote) {
-        detalle[`lote${i}_tipo`] = '-'
-        detalle[`lote${i}_llegada`] = '-'
-        detalle[`lote${i}_tSistema`] = '-'
-        detalle[`lote${i}_estado`] = '-'
-        continue
-      }
-
-      const estadoCorto = (() => {
-        switch (lote.estado) {
-          case 'CINTA1':
-            return 'C1'
-          case 'CINTA2':
-            return 'C2'
-          case 'ESCANER':
-            return 'ESC.'
-          case 'MANUAL':
-            return 'MAN'
-          case 'COLA_CINTAS':
-            return 'QC'
-          case 'COLA_ESCANER':
-            return 'QE'
-          case 'COLA_MANUAL':
-            return 'QM'
-          case 'TERMINADO':
-            return 'FIN'
-          default:
-            return lote.estado
-        }
-      })()
-
-      const tiempoSistema = lote.estado === 'TERMINADO' ? lote.tiempoSistema : reloj - lote.horaLlegada
-      detalle[`lote${i}_tipo`] = lote.tipo
-      detalle[`lote${i}_llegada`] = lote.horaLlegada
-      detalle[`lote${i}_tSistema`] = Number.isFinite(tiempoSistema) ? tiempoSistema : '-'
-      detalle[`lote${i}_estado`] = estadoCorto
-    }
-    return detalle
+  function guardarFila(fila) {
+    filasGuardadas.push({
+      id: filasGuardadas.length,
+      iteracion,
+      valores: fila.slice(),
+    })
   }
 
-  const filaEstado = (evento, extras = {}) => ({
-    iteracion,
-    reloj,
-    evento,
-    proxExpress: proximaLlegadaExpress?.tiempo ?? null,
-    proxEstandar: proximaLlegadaEstandar?.tiempo ?? null,
-    proxFinCinta1: cinta1.finEn,
-    proxFinCinta2: cinta2.finEn,
-    proxFinEscaner: escaner.finEn,
-    proxFinManual: operario.finEn,
-    estadoCinta1: cinta1.estado,
-    estadoCinta2: cinta2.estado,
-    estadoEscaner: escaner.estado,
-    estadoOperario: operario.estado,
-    cantColaCintas: colaCintas.length,
-    cantColaEscaner: colaEscaner.length,
-    cantColaManual: colaManual.length,
-    contadorExpress,
-    contadorEstandar,
-    acumuladoTiempoOperario,
-    maxColaCintas,
-    ...filaRnd,
-    ...construirFilaDetalleLote(),
-    ...extras,
-  })
-
-  function crearLote(tipo) {
-    contadorLotes += 1
-    const lote = {
-      id: contadorLotes,
-      tipo,
-      horaLlegada: reloj,
-      estado: 'CREADO',
-      tiempoSistema: 0,
-    }
-    lotes[lote.id] = lote
-    return lote
-  }
-
-  function finalizarLote(id) {
-    const lote = lotes[id]
-    if (!lote || lote.estado === 'TERMINADO') return
-    lote.estado = 'TERMINADO'
-    lote.tiempoSistema = reloj - lote.horaLlegada
-    if (lote.tipo === 'EXPRESS') {
-      sumaTiempoExpress += lote.tiempoSistema
-      lotesSalidaExpress += 1
-    } else {
-      sumaTiempoEstandar += lote.tiempoSistema
-      lotesSalidaEstandar += 1
-    }
-  }
-
-  function obtenerCintaDisponible() {
-    if (cinta1.estado === 'LIBRE') return cinta1
-    if (cinta2.estado === 'LIBRE') return cinta2
+  function obtenerCintaLibre() {
+    if (sistema.cinta1.estado === 'Libre') return sistema.cinta1
+    if (sistema.cinta2.estado === 'Libre') return sistema.cinta2
     return null
   }
 
-  function asignarCintaLibre(loteId) {
-    const cinta = obtenerCintaDisponible()
-    if (!cinta) return false
+  function escribirEstadoGeneral(fila, incluirLotes = true, acOperarioForzado = null) {
+    fila[COL.PROX_EXPRESS] = sistema.proximaExpress
+    fila[COL.PROX_ESTANDAR] = sistema.proximaEstandar
+    fila[COL.FIN_DESCARGA_CINTA_1] = sistema.cinta1.fin
+    fila[COL.FIN_DESCARGA_CINTA_2] = sistema.cinta2.fin
+    fila[COL.ESTADO_CINTA_1] = sistema.cinta1.estado
+    fila[COL.ESTADO_CINTA_2] = sistema.cinta2.estado
+    fila[COL.COLA_DESCARGA] = sistema.colaDescarga.length
+    fila[COL.ESTADO_ESCANER] = sistema.escaner.estado
+    fila[COL.COLA_ESCANER] = sistema.colaEscaner.length
+    fila[COL.FIN_ESCANEO] = sistema.escaner.fin
+    fila[COL.FIN_MANUAL] = sistema.operario.fin
+    fila[COL.ESTADO_OPERARIO] = sistema.operario.estado
+    fila[COL.COLA_MANUAL] = sistema.colaManual.length
+    fila[COL.CONT_EXPRESS] = sistema.contExpressTerminados
+    fila[COL.AC_EXPRESS] = sistema.acTiempoExpress
+    fila[COL.CONT_ESTANDAR] = sistema.contEstandarTerminados
+    fila[COL.AC_ESTANDAR] = sistema.acTiempoEstandar
+    fila[COL.AC_TIEMPO_OPERARIO] = acOperarioForzado ?? sistema.acTiempoOperario
+    fila[COL.MAX_COLA_DESCARGA] = sistema.maxColaDescarga
 
-    const rnd = Math.random()
-    const t = cintaMin + rnd * (cintaMax - cintaMin)
+    fila.length = CANT_COLUMNAS_FIJAS
+    if (!incluirLotes) return
 
-    cinta.estado = 'OCUPADO'
-    cinta.finEn = reloj + t
+    // Los lotes temporales solo existen mientras estan dentro del sistema.
+    // Por eso este bloque se arma de nuevo en cada fila y se reduce al terminar un lote.
+    Array.from(sistema.lotesActivos.values()).forEach((lote) => {
+      fila.push(lote.estado)
+      fila.push(lote.tiempoEntrada)
+    })
+  }
+
+  function programarLlegadaExpress(fila) {
+    const llegada = aleatorioExponencial(mediaExpress)
+    sistema.proximaExpress = sistema.reloj + llegada.tiempo
+    fila[COL.RND_EXPRESS] = llegada.rnd
+    fila[COL.TIEMPO_EXPRESS] = llegada.tiempo
+  }
+
+  function programarLlegadaEstandar(fila) {
+    const llegada = aleatorioExponencial(mediaEstandar)
+    sistema.proximaEstandar = sistema.reloj + llegada.tiempo
+    fila[COL.RND_ESTANDAR] = llegada.rnd
+    fila[COL.TIEMPO_ESTANDAR] = llegada.tiempo
+  }
+
+  function crearLote(tipo) {
+    const lote = {
+      id: sistema.proximoLoteId,
+      tipo,
+      estado: 'Esperando descarga',
+      horaLlegada: sistema.reloj,
+      tiempoEntrada: sistema.reloj,
+    }
+    sistema.proximoLoteId += 1
+    sistema.lotesActivos.set(lote.id, lote)
+
+    if (tipo === 'Express') sistema.totalExpressIngresados += 1
+    if (tipo === 'Estandar') sistema.totalEstandarIngresados += 1
+
+    return lote
+  }
+
+  function encolarDescarga(lote) {
+    lote.estado = 'Esperando descarga'
+
+    // Prioridad estricta: los Express pasan delante de los Estandar,
+    // pero se mantiene el orden de llegada entre camionetas del mismo tipo.
+    if (lote.tipo === 'Express') {
+      const primerEstandar = sistema.colaDescarga.findIndex((loteId) => sistema.lotesActivos.get(loteId)?.tipo === 'Estandar')
+      if (primerEstandar === -1) sistema.colaDescarga.push(lote.id)
+      else sistema.colaDescarga.splice(primerEstandar, 0, lote.id)
+    } else {
+      sistema.colaDescarga.push(lote.id)
+    }
+
+    sistema.maxColaDescarga = Math.max(sistema.maxColaDescarga, sistema.colaDescarga.length)
+  }
+
+  function asignarDescarga(loteId, fila, cintaPreferida = null) {
+    const cinta = cintaPreferida?.estado === 'Libre' ? cintaPreferida : obtenerCintaLibre()
+    const lote = sistema.lotesActivos.get(loteId)
+    if (!cinta || !lote) return false
+
+    const descarga = aleatorioUniforme(cintaMin, cintaMax)
+    cinta.estado = 'Ocupado'
+    cinta.fin = sistema.reloj + descarga.tiempo
     cinta.loteId = loteId
+    lote.estado = 'Descargando'
 
-    filaRnd.rndCinta = rnd
-    filaRnd.tCinta = t
-
-    if (lotes[loteId]) {
-      lotes[loteId].estado = cinta === cinta1 ? 'CINTA1' : 'CINTA2'
-    }
+    fila[COL.RND_DESCARGA] = descarga.rnd
+    fila[COL.TIEMPO_DESCARGA] = descarga.tiempo
     return true
   }
 
-  function asignarEscanerLibre() {
-    if (escaner.estado !== 'LIBRE' || colaEscaner.length === 0) return false
+  function tomarSiguienteDescarga(fila, cintaLiberada) {
+    if (sistema.colaDescarga.length === 0) return
+    const loteId = sistema.colaDescarga.shift()
+    asignarDescarga(loteId, fila, cintaLiberada)
+  }
 
-    const loteId = colaEscaner.shift()
-    const rnd = Math.random()
-    const t = escanerMin + rnd * (escanerMax - escanerMin)
+  function iniciarEscanerSiPuede(fila) {
+    if (sistema.escaner.estado !== 'Libre' || sistema.colaEscaner.length === 0) return
 
-    escaner.estado = 'OCUPADO'
-    escaner.finEn = reloj + t
-    escaner.loteId = loteId
+    const loteId = sistema.colaEscaner.shift()
+    const lote = sistema.lotesActivos.get(loteId)
+    if (!lote) return
 
-    filaRnd.rndEscaner = rnd
-    filaRnd.tEscaner = t
+    const escaneo = aleatorioUniforme(escanerMin, escanerMax)
+    sistema.escaner.estado = 'Ocupado'
+    sistema.escaner.fin = sistema.reloj + escaneo.tiempo
+    sistema.escaner.loteId = loteId
+    lote.estado = 'En escaneo'
 
-    if (lotes[loteId]) {
-      lotes[loteId].estado = 'ESCANER'
+    fila[COL.RND_ESCANEO] = escaneo.rnd
+    fila[COL.TIEMPO_ESCANEO] = escaneo.tiempo
+  }
+
+  function iniciarOperarioSiPuede(fila) {
+    if (sistema.operario.estado !== 'Libre' || sistema.colaManual.length === 0) return
+
+    const loteId = sistema.colaManual.shift()
+    const lote = sistema.lotesActivos.get(loteId)
+    if (!lote) return
+
+    const procesoManual = aleatorioUniforme(minManual, maxManual)
+    sistema.operario.estado = 'Ocupado'
+    sistema.operario.fin = sistema.reloj + procesoManual.tiempo
+    sistema.operario.loteId = loteId
+    sistema.operario.inicioOcupacion = sistema.reloj
+    lote.estado = 'En procesamiento manual'
+
+    fila[COL.RND_MANUAL] = procesoManual.rnd
+    fila[COL.TIEMPO_MANUAL] = procesoManual.tiempo
+  }
+
+  function finalizarLote(loteId) {
+    const lote = sistema.lotesActivos.get(loteId)
+    if (!lote) return
+
+    const tiempoSistema = sistema.reloj - lote.horaLlegada
+    if (lote.tipo === 'Express') {
+      sistema.contExpressTerminados += 1
+      sistema.acTiempoExpress += tiempoSistema
+    } else {
+      sistema.contEstandarTerminados += 1
+      sistema.acTiempoEstandar += tiempoSistema
     }
-    return true
+
+    sistema.lotesActivos.delete(loteId)
   }
 
-  function asignarOperarioLibre() {
-    if (operario.estado !== 'LIBRE' || colaManual.length === 0) return false
-
-    const loteId = colaManual.shift()
-    const minManual = Math.max(0.1, manualBase - manualVar)
-    const maxManual = manualBase + manualVar
-    const rnd = Math.random()
-    const t = minManual + rnd * (maxManual - minManual)
-
-    operario.estado = 'OCUPADO'
-    operario.finEn = reloj + t
-    operario.loteId = loteId
-    operario.inicioOcup = reloj
-
-    filaRnd.rndManual = rnd
-    filaRnd.tManual = t
-
-    if (lotes[loteId]) {
-      lotes[loteId].estado = 'MANUAL'
-    }
-    return true
-  }
-
-  const registrarEvento = (evento, extras = {}) => filas.push(filaEstado(evento, extras))
-
-  const llegadaExpress = aleatorioExponencial(mediaExpress)
-  proximaLlegadaExpress = { tiempo: reloj + llegadaExpress.val }
-  filaRnd = {
-    rndLlegadaExpress: llegadaExpress.r,
-    tLlegadaExpress: llegadaExpress.val,
-  }
-
-  const llegadaEstandar = aleatorioExponencial(mediaEstandar)
-  proximaLlegadaEstandar = { tiempo: reloj + llegadaEstandar.val }
-  filaRnd.rndLlegadaEstandar = llegadaEstandar.r
-  filaRnd.tLlegadaEstandar = llegadaEstandar.val
-
-  registrarEvento('INICIALIZACIÓN')
-
-  while (iteracion < maxIter) {
+  function elegirProximoEvento() {
     const candidatos = [
-      { tipo: 'LLEGADA_EXPRESS', t: proximaLlegadaExpress?.tiempo ?? Infinity },
-      { tipo: 'LLEGADA_ESTANDAR', t: proximaLlegadaEstandar?.tiempo ?? Infinity },
-      { tipo: 'FIN_CINTA1', t: cinta1.finEn },
-      { tipo: 'FIN_CINTA2', t: cinta2.finEn },
-      { tipo: 'FIN_ESCANER', t: escaner.finEn },
-      { tipo: 'FIN_MANUAL', t: operario.finEn },
-    ].filter((c) => Number.isFinite(c.t))
+      { tipo: 'llegada_camioneta_express', tiempo: tiempoEvento(sistema.proximaExpress), prioridad: 1 },
+      { tipo: 'llegada_camioneta_estandar', tiempo: tiempoEvento(sistema.proximaEstandar), prioridad: 2 },
+      { tipo: 'fin_descarga_cinta-1', tiempo: tiempoEvento(sistema.cinta1.fin), prioridad: 3 },
+      { tipo: 'fin_descarga_cinta-2', tiempo: tiempoEvento(sistema.cinta2.fin), prioridad: 4 },
+      { tipo: 'fin_escaneo', tiempo: tiempoEvento(sistema.escaner.fin), prioridad: 5 },
+      { tipo: 'fin_procesamiento_manual', tiempo: tiempoEvento(sistema.operario.fin), prioridad: 6 },
+    ].filter((evento) => Number.isFinite(evento.tiempo))
 
-    if (candidatos.length === 0) break
-    candidatos.sort((a, b) => a.t - b.t)
-    const evento = candidatos[0]
-    if (evento.t > tiempoMax) break
+    if (candidatos.length === 0) return null
+    candidatos.sort((a, b) => a.tiempo - b.tiempo || a.prioridad - b.prioridad)
+    return candidatos[0]
+  }
 
-    reloj = evento.t
+  function crearFilaActual(evento, relojEvento) {
+    vectorEstado[0] = vectorEstado[1]
+    vectorEstado[1] = prepararFilaDesdeAnterior(vectorEstado[0])
+    vectorEstado[1][COL.EVENTO] = evento
+    vectorEstado[1][COL.RELOJ] = relojEvento
+    return vectorEstado[1]
+  }
+
+  function tiempoOperarioHasta(tiempoFinal) {
+    if (sistema.operario.estado !== 'Ocupado') return sistema.acTiempoOperario
+    return sistema.acTiempoOperario + Math.max(0, tiempoFinal - sistema.operario.inicioOcupacion)
+  }
+
+  vectorEstado[1][COL.EVENTO] = 'Inicializacion'
+  vectorEstado[1][COL.RELOJ] = sistema.reloj
+  programarLlegadaExpress(vectorEstado[1])
+  programarLlegadaEstandar(vectorEstado[1])
+  escribirEstadoGeneral(vectorEstado[1])
+  guardarFila(vectorEstado[1])
+
+  while (iteracion < limiteIteraciones) {
+    const evento = elegirProximoEvento()
+    if (!evento || evento.tiempo > tiempoMax) break
+
     iteracion += 1
-    filaRnd = {}
+    sistema.reloj = evento.tiempo
+    const fila = crearFilaActual(evento.tipo, sistema.reloj)
 
-    if (evento.tipo === 'LLEGADA_EXPRESS') {
-      const llegada = aleatorioExponencial(mediaExpress)
-      proximaLlegadaExpress = { tiempo: reloj + llegada.val }
-      filaRnd.rndLlegadaExpress = llegada.r
-      filaRnd.tLlegadaExpress = llegada.val
+    if (evento.tipo === 'llegada_camioneta_express') {
+      programarLlegadaExpress(fila)
+      const lote = crearLote('Express')
+      if (!asignarDescarga(lote.id, fila)) encolarDescarga(lote)
+    }
 
-      const lote = crearLote('EXPRESS')
-      contadorExpress += 1
-      if (!asignarCintaLibre(lote.id)) {
-        lotes[lote.id].estado = 'COLA_CINTAS'
-        colaCintas.unshift(lote.id)
-        maxColaCintas = Math.max(maxColaCintas, colaCintas.length)
-      }
-      registrarEvento('LLEGADA EXPRESS')
-    } else if (evento.tipo === 'LLEGADA_ESTANDAR') {
-      const llegada = aleatorioExponencial(mediaEstandar)
-      proximaLlegadaEstandar = { tiempo: reloj + llegada.val }
-      filaRnd.rndLlegadaEstandar = llegada.r
-      filaRnd.tLlegadaEstandar = llegada.val
+    if (evento.tipo === 'llegada_camioneta_estandar') {
+      programarLlegadaEstandar(fila)
+      const lote = crearLote('Estandar')
+      if (!asignarDescarga(lote.id, fila)) encolarDescarga(lote)
+    }
 
-      const lote = crearLote('ESTÁNDAR')
-      contadorEstandar += 1
-      if (!asignarCintaLibre(lote.id)) {
-        lotes[lote.id].estado = 'COLA_CINTAS'
-        colaCintas.push(lote.id)
-        maxColaCintas = Math.max(maxColaCintas, colaCintas.length)
-      }
-      registrarEvento('LLEGADA ESTÁNDAR')
-    } else if (evento.tipo === 'FIN_CINTA1' || evento.tipo === 'FIN_CINTA2') {
-      const cinta = evento.tipo === 'FIN_CINTA1' ? cinta1 : cinta2
+    if (evento.tipo === 'fin_descarga_cinta-1' || evento.tipo === 'fin_descarga_cinta-2') {
+      const cinta = evento.tipo === 'fin_descarga_cinta-1' ? sistema.cinta1 : sistema.cinta2
       const loteId = cinta.loteId
-      cinta.estado = 'LIBRE'
-      cinta.finEn = Infinity
+      const lote = sistema.lotesActivos.get(loteId)
+
+      cinta.estado = 'Libre'
+      cinta.fin = null
       cinta.loteId = null
-      if (lotes[loteId]) {
-        lotes[loteId].estado = 'COLA_ESCANER'
-      }
-      colaEscaner.push(loteId)
-      asignarEscanerLibre()
 
-      if (colaCintas.length > 0) {
-        const siguiente = colaCintas.shift()
-        if (lotes[siguiente]) {
-          lotes[siguiente].estado = cinta === cinta1 ? 'CINTA1' : 'CINTA2'
-        }
-        asignarCintaLibre(siguiente)
+      if (lote) {
+        lote.estado = 'Esperando escaneo'
+        sistema.colaEscaner.push(lote.id)
       }
-      registrarEvento(evento.tipo)
-    } else if (evento.tipo === 'FIN_ESCANER') {
-      const loteId = escaner.loteId
-      escaner.estado = 'LIBRE'
-      escaner.finEn = Infinity
-      escaner.loteId = null
-      const rechazo = Math.random() < pRechazo
-      filaRnd.rndRechazo = rechazo ? 1 : 0
-      filaRnd.rechazado = rechazo ? 'Sí' : 'No'
 
-      if (rechazo) {
-        if (lotes[loteId]) {
-          lotes[loteId].estado = 'COLA_MANUAL'
-        }
-        colaManual.push(loteId)
-        asignarOperarioLibre()
+      iniciarEscanerSiPuede(fila)
+      tomarSiguienteDescarga(fila, cinta)
+    }
+
+    if (evento.tipo === 'fin_escaneo') {
+      const loteId = sistema.escaner.loteId
+      const lote = sistema.lotesActivos.get(loteId)
+      const rndLectura = Math.random()
+      const rechazado = rndLectura >= probabilidadAceptacion
+
+      sistema.escaner.estado = 'Libre'
+      sistema.escaner.fin = null
+      sistema.escaner.loteId = null
+
+      fila[COL.RND_LECTURA] = rndLectura
+      fila[COL.RESULTADO_LECTURA] = rechazado ? 'Rechazado' : 'Aceptado'
+
+      if (lote && rechazado) {
+        lote.estado = 'Esperando procesamiento manual'
+        sistema.colaManual.push(lote.id)
+        iniciarOperarioSiPuede(fila)
       } else {
         finalizarLote(loteId)
       }
-      asignarEscanerLibre()
-      registrarEvento('FIN ESCÁNER', {
-        rechazado: filaRnd.rechazado,
-      })
-    } else if (evento.tipo === 'FIN_MANUAL') {
-      const loteId = operario.loteId
-      const duracion = operario.finEn - (operario.inicioOcup ?? reloj)
-      acumuladoTiempoOperario += duracion
-      operario.estado = 'LIBRE'
-      operario.finEn = Infinity
-      operario.loteId = null
-      finalizarLote(loteId)
-      asignarOperarioLibre()
-      registrarEvento('FIN MANUAL')
+
+      iniciarEscanerSiPuede(fila)
     }
 
-    if (cinta1.finEn !== Infinity) {
-      filaRnd.minFinCinta1 = cinta1.finEn
+    if (evento.tipo === 'fin_procesamiento_manual') {
+      const loteId = sistema.operario.loteId
+      const inicio = sistema.operario.inicioOcupacion ?? sistema.reloj
+
+      sistema.acTiempoOperario += sistema.reloj - inicio
+      sistema.operario.estado = 'Libre'
+      sistema.operario.fin = null
+      sistema.operario.loteId = null
+      sistema.operario.inicioOcupacion = null
+
+      finalizarLote(loteId)
+      iniciarOperarioSiPuede(fila)
     }
-    if (cinta2.finEn !== Infinity) {
-      filaRnd.minFinCinta2 = cinta2.finEn
-    }
-    if (escaner.finEn !== Infinity) {
-      filaRnd.minFinEscaner = escaner.finEn
-    }
-    if (operario.finEn !== Infinity) {
-      filaRnd.minFinManual = operario.finEn
-    }
+
+    escribirEstadoGeneral(fila)
+    guardarFila(fila)
   }
 
-  const tiempoSimulacion = reloj
-  const promedioExpress = lotesSalidaExpress ? sumaTiempoExpress / lotesSalidaExpress : 0
-  const promedioEstandar = lotesSalidaEstandar ? sumaTiempoEstandar / lotesSalidaEstandar : 0
-  const porcentajeOperario = tiempoSimulacion ? (acumuladoTiempoOperario / tiempoSimulacion) * 100 : 0
+  let tiempoCierre = sistema.reloj
+  let acOperarioCierre = tiempoOperarioHasta(tiempoCierre)
+
+  if (sistema.reloj < tiempoMax && iteracion < limiteIteraciones) {
+    tiempoCierre = tiempoMax
+    acOperarioCierre = tiempoOperarioHasta(tiempoMax)
+    sistema.reloj = tiempoMax
+
+    const filaFinal = crearFilaActual('fin_simulacion', tiempoMax)
+    escribirEstadoGeneral(filaFinal, false, acOperarioCierre)
+    guardarFila(filaFinal)
+  }
+
+  const promedioExpress = sistema.contExpressTerminados ? sistema.acTiempoExpress / sistema.contExpressTerminados : 0
+  const promedioEstandar = sistema.contEstandarTerminados ? sistema.acTiempoEstandar / sistema.contEstandarTerminados : 0
+  const porcentajeOperario = tiempoCierre ? (acOperarioCierre / tiempoCierre) * 100 : 0
 
   return {
-    filas,
-    maximoLoteId: contadorLotes,
+    filas: filasGuardadas,
+    maxLotesActivos: filasGuardadas.reduce((maximo, fila) => Math.max(maximo, Math.ceil((fila.valores.length - CANT_COLUMNAS_FIJAS) / 2)), 0),
     resumen: {
-      tiempoTotal: tiempoSimulacion,
+      tiempoTotal: tiempoCierre,
       promExpress: promedioExpress,
       promEstandar: promedioEstandar,
       pctOperario: porcentajeOperario,
-      maxColaCintas,
-      totalLotes: contadorLotes,
-      totalExpress: contadorExpress,
-      totalEstandar: contadorEstandar,
-      lotesExitExpress: lotesSalidaExpress,
-      lotesExitEstandar: lotesSalidaEstandar,
+      maxColaCintas: sistema.maxColaDescarga,
+      totalLotes: sistema.totalExpressIngresados + sistema.totalEstandarIngresados,
+      totalExpress: sistema.totalExpressIngresados,
+      totalEstandar: sistema.totalEstandarIngresados,
+      lotesExitExpress: sistema.contExpressTerminados,
+      lotesExitEstandar: sistema.contEstandarTerminados,
     },
   }
 }
 
-const STATIC_COL_GROUPS = [
-  {
-    label: 'EVENTO',
-    cols: [
-      { key: 'iteracion', label: '#' },
-      { key: 'reloj', label: 'Reloj' },
-      { key: 'evento', label: 'Evento' },
-    ],
-  },
-  {
-    label: 'PRÓXIMOS EVENTOS',
-    cols: [
-      { key: 'proxExpress', label: 'Prox Exp.' },
-      { key: 'proxEstandar', label: 'Prox Est.' },
-      { key: 'proxFinCinta1', label: 'Fin Cinta 1' },
-      { key: 'proxFinCinta2', label: 'Fin Cinta 2' },
-      { key: 'proxFinEscaner', label: 'Fin Escáner' },
-      { key: 'proxFinManual', label: 'Fin Manual' },
-    ],
-  },
-  {
-    label: 'LLEGADAS',
-    cols: [
-      { key: 'rndLlegadaExpress', label: 'RND Exp.' },
-      { key: 'tLlegadaExpress', label: 'T Exp.' },
-      { key: 'rndLlegadaEstandar', label: 'RND Est.' },
-      { key: 'tLlegadaEstandar', label: 'T Est.' },
-    ],
-  },
-  {
-    label: 'TIEMPO EN CINTA',
-    cols: [
-      { key: 'rndCinta', label: 'RND Cinta' },
-      { key: 'tCinta', label: 'T Cinta' },
-      { key: 'minFinCinta1', label: 'Fin Cinta 1' },
-      { key: 'minFinCinta2', label: 'Fin Cinta 2' },
-    ],
-  },
-  {
-    label: 'ESCÁNER',
-    cols: [
-      { key: 'rndEscaner', label: 'RND Esc.' },
-      { key: 'tEscaner', label: 'T Esc.' },
-      { key: 'minFinEscaner', label: 'Fin Escáner' },
-    ],
-  },
-  {
-    label: 'MANUAL',
-    cols: [
-      { key: 'rndRechazo', label: 'RND Rech.' },
-      { key: 'rechazado', label: 'Rech.' },
-      { key: 'rndManual', label: 'RND Manual' },
-      { key: 'tManual', label: 'T Manual' },
-      { key: 'minFinManual', label: 'Fin Manual' },
-    ],
-  },
-  {
-    label: 'ESTADOS',
-    cols: [
-      { key: 'estadoCinta1', label: 'Cinta 1' },
-      { key: 'estadoCinta2', label: 'Cinta 2' },
-      { key: 'estadoEscaner', label: 'Escáner' },
-      { key: 'estadoOperario', label: 'Operario' },
-      { key: 'cantColaCintas', label: 'Cola Cintas' },
-      { key: 'cantColaEscaner', label: 'Cola Escáner' },
-      { key: 'cantColaManual', label: 'Cola Manual' },
-    ],
-  },
-  {
-    label: 'ESTADÍSTICAS',
-    cols: [
-      { key: 'contadorExpress', label: 'Cont Exp.' },
-      { key: 'contadorEstandar', label: 'Cont Est.' },
-      { key: 'acumuladoTiempoOperario', label: 'Ac. T. Oper.' },
-      { key: 'maxColaCintas', label: 'Max Cola' },
-    ],
-  },
-]
-
-function construirGruposLotes(maximoLoteId) {
-  const cols = []
-  for (let i = 1; i <= maximoLoteId; i += 1) {
-    cols.push({ key: `lote${i}_tipo`, label: `Lote ${i} Tipo` })
-    cols.push({ key: `lote${i}_llegada`, label: `Lote ${i} Lleg.` })
-    cols.push({ key: `lote${i}_tSistema`, label: `Lote ${i} T.Sis.` })
-    cols.push({ key: `lote${i}_estado`, label: `Lote ${i} Est.` })
-  }
-  return [{ label: 'LOTES', cols }]
-}
-
-function flatRow(row, maximoLoteId) {
-  const flat = { ...row }
-  for (let i = 1; i <= maximoLoteId; i += 1) {
-    const keys = [`lote${i}_tipo`, `lote${i}_llegada`, `lote${i}_tSistema`, `lote${i}_estado`]
-    keys.forEach((key) => {
-      if (!(key in flat)) {
-        flat[key] = '-'
-      }
-    })
-  }
-  return flat
-}
-
-function numFmt(v) {
-  if (v === null || v === undefined || v === '') return '-'
-  if (typeof v === 'number') return Number.isFinite(v) ? v.toFixed(2) : '-'
-  return String(v)
+function construirColumnasLotes(cantidadLotes) {
+  return Array.from({ length: cantidadLotes }, () => ['Estado', 'Tiempo entrada']).flat()
 }
 
 function ParamField({ label, value, onChange, step = 1, min = 0, max }) {
@@ -523,9 +574,10 @@ export default function Aplicacion() {
     cantFilas: 15,
   })
 
-  const actualizarParametro = (key) => (value) => setParametros((prev) => ({ ...prev, [key]: value }))
   const [resultadoSimulacion, setResultadoSimulacion] = useState(null)
   const [simulando, setSimulando] = useState(false)
+
+  const actualizarParametro = (key) => (value) => setParametros((prev) => ({ ...prev, [key]: value }))
 
   const manejarSimulacion = useCallback(() => {
     setSimulando(true)
@@ -535,61 +587,63 @@ export default function Aplicacion() {
     }, 0)
   }, [parametros])
 
-  const gruposColumnas = useMemo(() => {
-    if (!resultadoSimulacion) return STATIC_COL_GROUPS
-    return [...STATIC_COL_GROUPS, ...construirGruposLotes(resultadoSimulacion.maximoLoteId)]
-  }, [resultadoSimulacion])
-
-  const todasColumnas = useMemo(() => gruposColumnas.flatMap((group) => group.cols), [gruposColumnas])
-
   const filasVisibles = useMemo(() => {
     if (!resultadoSimulacion) return []
-    const primero = resultadoSimulacion.filas[0]
-    const ultimo = resultadoSimulacion.filas[resultadoSimulacion.filas.length - 1]
-    const indiceInicio = resultadoSimulacion.filas.findIndex((row) => row.reloj >= parametros.horaInicio)
+
+    const primera = resultadoSimulacion.filas[0]
+    const ultima = resultadoSimulacion.filas[resultadoSimulacion.filas.length - 1]
+    const indiceInicio = resultadoSimulacion.filas.findIndex((fila) => fila.valores[COL.RELOJ] >= parametros.horaInicio)
     const seleccion = indiceInicio >= 0 ? resultadoSimulacion.filas.slice(indiceInicio, indiceInicio + parametros.cantFilas) : []
-    const map = new Map()
-    ;[primero, ...seleccion, ultimo].forEach((row) => {
-      if (row && !map.has(row.iteracion)) map.set(row.iteracion, row)
+    const filasSinRepetir = new Map()
+
+    ;[primera, ...seleccion, ultima].forEach((fila) => {
+      if (fila) filasSinRepetir.set(fila.id, fila)
     })
-    return Array.from(map.values()).map((row) => flatRow(row, resultadoSimulacion.maximoLoteId))
+
+    return Array.from(filasSinRepetir.values()).sort((a, b) => a.id - b.id)
   }, [resultadoSimulacion, parametros.horaInicio, parametros.cantFilas])
 
-  const ultimaIteracionVisible = filasVisibles[filasVisibles.length - 1]?.iteracion
+  const cantidadLotesVisible = useMemo(() => {
+    return filasVisibles.reduce((maximo, fila) => Math.max(maximo, Math.ceil((fila.valores.length - CANT_COLUMNAS_FIJAS) / 2)), 0)
+  }, [filasVisibles])
+
+  const columnasLotes = useMemo(() => construirColumnasLotes(cantidadLotesVisible), [cantidadLotesVisible])
+  const columnas = useMemo(() => [...COLUMNAS_VECTOR, ...columnasLotes], [columnasLotes])
+  const idUltimaFila = filasVisibles[filasVisibles.length - 1]?.id
 
   return (
     <div className="app">
       <header className="top-bar">
         <div>
-          <div className="title">Simulación Expreso Norte</div>
-          <div className="subtitle">Modelo de arribos, cintas, escáner y proceso manual</div>
+          <div className="title">Simulacion Expreso Norte</div>
+          <div className="subtitle">Modelo de camionetas, descarga, escaner y procesamiento manual</div>
         </div>
         <div className="top-actions">
           <button className="run-button" onClick={manejarSimulacion} disabled={simulando}>
-            {simulando ? 'Simulando...' : 'Ejecutar Simulación'}
+            {simulando ? 'Simulando...' : 'Ejecutar simulacion'}
           </button>
         </div>
       </header>
 
       <div className="body-layout">
         <aside className="panel side-panel">
-          <div className="panel-title">Parámetros</div>
-          <ParamField label="Tiempo máx. (min)" value={parametros.tiempoMax} onChange={actualizarParametro('tiempoMax')} min={1} />
-          <ParamField label="Iteraciones" value={parametros.maxIter} onChange={actualizarParametro('maxIter')} min={10} />
+          <div className="panel-title">Parametros</div>
+          <ParamField label="Tiempo max. (min)" value={parametros.tiempoMax} onChange={actualizarParametro('tiempoMax')} min={1} />
+          <ParamField label="Iteraciones" value={parametros.maxIter} onChange={actualizarParametro('maxIter')} min={10} max={100000} />
           <div className="section-title">Arribos</div>
-          <ParamField label="Media Expreso" value={parametros.mediaExpress} onChange={actualizarParametro('mediaExpress')} min={1} />
-          <ParamField label="Media Estándar" value={parametros.mediaEstandar} onChange={actualizarParametro('mediaEstandar')} min={1} />
+          <ParamField label="Media Express" value={parametros.mediaExpress} onChange={actualizarParametro('mediaExpress')} min={1} />
+          <ParamField label="Media Estandar" value={parametros.mediaEstandar} onChange={actualizarParametro('mediaEstandar')} min={1} />
           <div className="section-title">Cintas</div>
-          <ParamField label="Min Cinta" value={parametros.cintaMin} onChange={actualizarParametro('cintaMin')} min={1} />
-          <ParamField label="Max Cinta" value={parametros.cintaMax} onChange={actualizarParametro('cintaMax')} min={parametros.cintaMin} />
-          <div className="section-title">Escáner</div>
-          <ParamField label="Min Escáner" value={parametros.escanerMin} onChange={actualizarParametro('escanerMin')} min={1} />
-          <ParamField label="Max Escáner" value={parametros.escanerMax} onChange={actualizarParametro('escanerMax')} min={parametros.escanerMin} />
+          <ParamField label="Min descarga" value={parametros.cintaMin} onChange={actualizarParametro('cintaMin')} min={1} />
+          <ParamField label="Max descarga" value={parametros.cintaMax} onChange={actualizarParametro('cintaMax')} min={parametros.cintaMin} />
+          <div className="section-title">Escaner</div>
+          <ParamField label="Min escaner" value={parametros.escanerMin} onChange={actualizarParametro('escanerMin')} min={1} />
+          <ParamField label="Max escaner" value={parametros.escanerMax} onChange={actualizarParametro('escanerMax')} min={parametros.escanerMin} />
           <div className="section-title">Manual</div>
-          <ParamField label="Base Manual" value={parametros.manualBase} onChange={actualizarParametro('manualBase')} min={1} />
-          <ParamField label="Variación" value={parametros.manualVar} onChange={actualizarParametro('manualVar')} min={0} />
-          <ParamField label="P. Rechazo" value={parametros.pRechazo} onChange={actualizarParametro('pRechazo')} step={0.01} min={0} max={1} />
-          <div className="section-title">Presentación</div>
+          <ParamField label="Base manual" value={parametros.manualBase} onChange={actualizarParametro('manualBase')} min={1} />
+          <ParamField label="Variacion" value={parametros.manualVar} onChange={actualizarParametro('manualVar')} min={0} />
+          <ParamField label="P. rechazo" value={parametros.pRechazo} onChange={actualizarParametro('pRechazo')} step={0.01} min={0} max={1} />
+          <div className="section-title">Presentacion</div>
           <ParamField label="Hora inicio" value={parametros.horaInicio} onChange={actualizarParametro('horaInicio')} min={0} />
           <ParamField label="Filas" value={parametros.cantFilas} onChange={actualizarParametro('cantFilas')} min={5} />
         </aside>
@@ -597,16 +651,16 @@ export default function Aplicacion() {
         <main className="panel content-panel">
           <div className="stats-grid">
             <StatCard label="Tiempo simulado" value={resultadoSimulacion ? `${resultadoSimulacion.resumen.tiempoTotal.toFixed(2)} min` : '-'} />
-            <StatCard label="Prom. Expreso" value={resultadoSimulacion ? `${resultadoSimulacion.resumen.promExpress.toFixed(2)} min` : '-'} />
-            <StatCard label="Prom. Estándar" value={resultadoSimulacion ? `${resultadoSimulacion.resumen.promEstandar.toFixed(2)} min` : '-'} />
+            <StatCard label="Prom. Express" value={resultadoSimulacion ? `${resultadoSimulacion.resumen.promExpress.toFixed(2)} min` : '-'} />
+            <StatCard label="Prom. Estandar" value={resultadoSimulacion ? `${resultadoSimulacion.resumen.promEstandar.toFixed(2)} min` : '-'} />
             <StatCard label="Uso operario" value={resultadoSimulacion ? `${resultadoSimulacion.resumen.pctOperario.toFixed(2)} %` : '-'} accent />
-            <StatCard label="Máx cola cintas" value={resultadoSimulacion ? resultadoSimulacion.resumen.maxColaCintas : '-'} />
-            <StatCard label="Total camiones" value={resultadoSimulacion ? resultadoSimulacion.resumen.totalLotes : '-'} />
+            <StatCard label="Max cola descarga" value={resultadoSimulacion ? resultadoSimulacion.resumen.maxColaCintas : '-'} />
+            <StatCard label="Total camionetas" value={resultadoSimulacion ? resultadoSimulacion.resumen.totalLotes : '-'} />
           </div>
 
           {!resultadoSimulacion ? (
             <div className="placeholder">
-              <p>Presiona "Ejecutar Simulación" para generar resultados.</p>
+              <p>Ejecuta la simulacion para generar el vector de estado.</p>
             </div>
           ) : (
             <div className="table-wrapper">
@@ -616,17 +670,31 @@ export default function Aplicacion() {
               <div className="table-scroll">
                 <table className="vtable">
                   <thead>
-                    <tr>
-                      {todasColumnas.map((col) => (
-                        <th key={col.key}>{col.label}</th>
+                    <tr className="super-group-row">
+                      <th colSpan={CANT_COLUMNAS_FIJAS}></th>
+                      {cantidadLotesVisible > 0 && <th colSpan={cantidadLotesVisible * 2}>Lotes</th>}
+                    </tr>
+                    <tr className="group-row">
+                      {GRUPOS_VECTOR.map((grupo, index) => (
+                        <th key={`${grupo.label}-${index}`} colSpan={grupo.span}>
+                          {grupo.label}
+                        </th>
+                      ))}
+                      {Array.from({ length: cantidadLotesVisible }, (_, index) => (
+                        <th key={`lote-grupo-${index}`} colSpan={2}>{`${index + 1}.`}</th>
+                      ))}
+                    </tr>
+                    <tr className="column-row">
+                      {columnas.map((label, index) => (
+                        <th key={`${label}-${index}`}>{label}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {filasVisibles.map((row) => (
-                      <tr key={row.iteracion} className={row.iteracion === ultimaIteracionVisible ? 'sticky-last-row' : ''}>
-                        {todasColumnas.map((col) => (
-                          <td key={col.key}>{numFmt(row[col.key])}</td>
+                    {filasVisibles.map((fila) => (
+                      <tr key={fila.id} className={fila.id === idUltimaFila ? 'sticky-last-row' : ''}>
+                        {columnas.map((_, index) => (
+                          <td key={`${fila.id}-${index}`}>{formatearNumero(fila.valores[index])}</td>
                         ))}
                       </tr>
                     ))}

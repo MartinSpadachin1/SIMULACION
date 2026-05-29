@@ -215,6 +215,26 @@ body {
   z-index: 3;
 }
 
+.vtable thead .super-group-row th {
+  top: 0;
+  height: 28px;
+  text-align: center;
+  background: rgba(22, 29, 47, 0.98);
+}
+
+.vtable thead .group-row th {
+  top: 28px;
+  height: 34px;
+  text-align: center;
+  background: rgba(22, 29, 47, 0.98);
+  color: var(--text-muted);
+}
+
+.vtable thead .column-row th {
+  top: 62px;
+  min-width: 82px;
+}
+
 .vtable tbody tr.sticky-last-row {
   position: sticky;
   bottom: 0;
