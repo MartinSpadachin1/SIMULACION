@@ -43,6 +43,7 @@ const COL = Object.freeze({
 
 const CANT_COLUMNAS_FIJAS = 33
 
+// Define los nombres visibles de cada columna fija del vector de estado.
 const COLUMNAS_VECTOR = [
   'Evento',
   'Reloj',
@@ -79,6 +80,7 @@ const COLUMNAS_VECTOR = [
   'Cant Max.',
 ]
 
+// Define los titulos agrupados que aparecen arriba de las columnas del vector.
 const GRUPOS_VECTOR = [
   { label: '', span: 2 },
   { label: 'llegada_camioneta_express', span: 3 },
@@ -95,6 +97,7 @@ const GRUPOS_VECTOR = [
   { label: '', span: 1 },
 ]
 
+// Indica que columnas se limpian en cada nueva fila porque solo valen para el evento actual.
 const COLUMNAS_TRANSITORIAS = [
   COL.RND_EXPRESS,
   COL.TIEMPO_EXPRESS,
@@ -110,10 +113,12 @@ const COLUMNAS_TRANSITORIAS = [
   COL.TIEMPO_MANUAL,
 ]
 
+// Asegura que una probabilidad ingresada por parametro quede entre 0 y 1.
 function limpiarProbabilidad(valor) {
   return Math.min(1, Math.max(0, Number.isFinite(valor) ? valor : 0))
 }
 
+// Genera un tiempo con distribucion exponencial negativa usando la media recibida.
 function aleatorioExponencial(media) {
   const rnd = Math.random()
   return {
@@ -122,6 +127,7 @@ function aleatorioExponencial(media) {
   }
 }
 
+// Genera un tiempo con distribucion uniforme entre un minimo y un maximo.
 function aleatorioUniforme(min, max) {
   const rnd = Math.random()
   return {
@@ -130,6 +136,7 @@ function aleatorioUniforme(min, max) {
   }
 }
 
+// Crea la estructura base para un recurso permanente: cinta, escaner u operario.
 function crearServidor() {
   return {
     estado: 'Libre',
@@ -139,10 +146,12 @@ function crearServidor() {
   }
 }
 
+// Crea una fila vacia del vector con la cantidad fija de columnas.
 function crearFilaVacia() {
   return Array(CANT_COLUMNAS_FIJAS).fill('')
 }
 
+// Copia la fila anterior y limpia los datos transitorios antes de procesar el nuevo evento.
 function prepararFilaDesdeAnterior(filaAnterior) {
   const fila = filaAnterior.slice(0, CANT_COLUMNAS_FIJAS)
   COLUMNAS_TRANSITORIAS.forEach((columna) => {
@@ -151,16 +160,19 @@ function prepararFilaDesdeAnterior(filaAnterior) {
   return fila
 }
 
+// Convierte valores nulos de eventos futuros en infinito para poder compararlos.
 function tiempoEvento(valor) {
   return valor === null || valor === undefined ? INFINITO : valor
 }
 
+// Formatea los valores que se muestran en la tabla del vector de estado.
 function formatearNumero(valor) {
   if (valor === null || valor === undefined || valor === '') return '-'
   if (typeof valor === 'number') return Number.isFinite(valor) ? valor.toFixed(2) : '-'
   return String(valor)
 }
 
+// Ejecuta la simulacion completa y devuelve las filas visibles junto con los resultados estadisticos.
 function simular(parametros) {
   const {
     tiempoMax,
@@ -209,9 +221,12 @@ function simular(parametros) {
   // El vector de estado que se usa para calcular tiene siempre dos filas:
   // posicion 0 = fila anterior, posicion 1 = fila actual.
   const vectorEstado = [crearFilaVacia(), crearFilaVacia()]
+
+  // Guarda una copia historica de las filas calculadas para poder mostrarlas en pantalla.
   const filasGuardadas = []
   let iteracion = 0
 
+  // Copia la fila actual terminada al historial que luego se renderiza.
   function guardarFila(fila) {
     filasGuardadas.push({
       id: filasGuardadas.length,
@@ -220,12 +235,14 @@ function simular(parametros) {
     })
   }
 
+  // Devuelve la primera cinta libre disponible, o null si las dos estan ocupadas.
   function obtenerCintaLibre() {
     if (sistema.cinta1.estado === 'Libre') return sistema.cinta1
     if (sistema.cinta2.estado === 'Libre') return sistema.cinta2
     return null
   }
 
+  // Escribe en la fila todos los estados permanentes, acumuladores, colas y lotes activos.
   function escribirEstadoGeneral(fila, incluirLotes = true, acOperarioForzado = null) {
     fila[COL.PROX_EXPRESS] = sistema.proximaExpress
     fila[COL.PROX_ESTANDAR] = sistema.proximaEstandar
@@ -258,6 +275,7 @@ function simular(parametros) {
     })
   }
 
+  // Programa la siguiente llegada Express y deja su RND y tiempo en la fila actual.
   function programarLlegadaExpress(fila) {
     const llegada = aleatorioExponencial(mediaExpress)
     sistema.proximaExpress = sistema.reloj + llegada.tiempo
@@ -265,6 +283,7 @@ function simular(parametros) {
     fila[COL.TIEMPO_EXPRESS] = llegada.tiempo
   }
 
+  // Programa la siguiente llegada Estandar y deja su RND y tiempo en la fila actual.
   function programarLlegadaEstandar(fila) {
     const llegada = aleatorioExponencial(mediaEstandar)
     sistema.proximaEstandar = sistema.reloj + llegada.tiempo
@@ -272,6 +291,7 @@ function simular(parametros) {
     fila[COL.TIEMPO_ESTANDAR] = llegada.tiempo
   }
 
+  // Crea un lote temporal cuando entra una camioneta al sistema.
   function crearLote(tipo) {
     const lote = {
       id: sistema.proximoLoteId,
@@ -289,6 +309,7 @@ function simular(parametros) {
     return lote
   }
 
+  // Agrega un lote a la cola de descarga respetando la prioridad de Express.
   function encolarDescarga(lote) {
     lote.estado = 'Esperando descarga'
 
@@ -305,6 +326,7 @@ function simular(parametros) {
     sistema.maxColaDescarga = Math.max(sistema.maxColaDescarga, sistema.colaDescarga.length)
   }
 
+  // Asigna un lote a una cinta libre y calcula el fin de descarga.
   function asignarDescarga(loteId, fila, cintaPreferida = null) {
     const cinta = cintaPreferida?.estado === 'Libre' ? cintaPreferida : obtenerCintaLibre()
     const lote = sistema.lotesActivos.get(loteId)
@@ -321,12 +343,14 @@ function simular(parametros) {
     return true
   }
 
+  // Toma el siguiente lote de la cola de descarga cuando una cinta queda libre.
   function tomarSiguienteDescarga(fila, cintaLiberada) {
     if (sistema.colaDescarga.length === 0) return
     const loteId = sistema.colaDescarga.shift()
     asignarDescarga(loteId, fila, cintaLiberada)
   }
 
+  // Si el escaner esta libre, toma un lote de su cola y calcula el fin de escaneo.
   function iniciarEscanerSiPuede(fila) {
     if (sistema.escaner.estado !== 'Libre' || sistema.colaEscaner.length === 0) return
 
@@ -344,6 +368,7 @@ function simular(parametros) {
     fila[COL.TIEMPO_ESCANEO] = escaneo.tiempo
   }
 
+  // Si el operario esta libre, toma un lote rechazado y calcula el fin del proceso manual.
   function iniciarOperarioSiPuede(fila) {
     if (sistema.operario.estado !== 'Libre' || sistema.colaManual.length === 0) return
 
@@ -362,6 +387,7 @@ function simular(parametros) {
     fila[COL.TIEMPO_MANUAL] = procesoManual.tiempo
   }
 
+  // Saca un lote del sistema y actualiza contadores y acumuladores por tipo.
   function finalizarLote(loteId) {
     const lote = sistema.lotesActivos.get(loteId)
     if (!lote) return
@@ -378,7 +404,9 @@ function simular(parametros) {
     sistema.lotesActivos.delete(loteId)
   }
 
+  // Busca el proximo evento por menor tiempo y usa prioridad para desempatar.
   function elegirProximoEvento() {
+    // Lista todos los eventos posibles con su instante programado.
     const candidatos = [
       { tipo: 'llegada_camioneta_express', tiempo: tiempoEvento(sistema.proximaExpress), prioridad: 1 },
       { tipo: 'llegada_camioneta_estandar', tiempo: tiempoEvento(sistema.proximaEstandar), prioridad: 2 },
@@ -393,6 +421,7 @@ function simular(parametros) {
     return candidatos[0]
   }
 
+  // Avanza el vector de dos filas: la actual pasa a anterior y se prepara una nueva actual.
   function crearFilaActual(evento, relojEvento) {
     vectorEstado[0] = vectorEstado[1]
     vectorEstado[1] = prepararFilaDesdeAnterior(vectorEstado[0])
@@ -401,6 +430,7 @@ function simular(parametros) {
     return vectorEstado[1]
   }
 
+  // Calcula el tiempo ocupado del operario hasta un instante dado.
   function tiempoOperarioHasta(tiempoFinal) {
     if (sistema.operario.estado !== 'Ocupado') return sistema.acTiempoOperario
     return sistema.acTiempoOperario + Math.max(0, tiempoFinal - sistema.operario.inicioOcupacion)
@@ -528,10 +558,12 @@ function simular(parametros) {
   }
 }
 
+// Construye las columnas dinamicas de lotes activos: Estado y Tiempo entrada por cada lote.
 function construirColumnasLotes(cantidadLotes) {
   return Array.from({ length: cantidadLotes }, () => ['Estado', 'Tiempo entrada']).flat()
 }
 
+// Renderiza un campo numerico de parametros con su etiqueta.
 function ParamField({ label, value, onChange, step = 1, min = 0, max }) {
   return (
     <label className="param-field">
@@ -548,6 +580,7 @@ function ParamField({ label, value, onChange, step = 1, min = 0, max }) {
   )
 }
 
+// Renderiza una tarjeta simple para mostrar un indicador del resumen.
 function StatCard({ label, value, accent }) {
   return (
     <div className={`stat-card ${accent ? 'accent' : ''}`}>
@@ -557,6 +590,7 @@ function StatCard({ label, value, accent }) {
   )
 }
 
+// Componente principal de la aplicacion: maneja parametros, ejecucion y visualizacion.
 export default function Aplicacion() {
   const [parametros, setParametros] = useState({
     tiempoMax: 480,
@@ -577,8 +611,10 @@ export default function Aplicacion() {
   const [resultadoSimulacion, setResultadoSimulacion] = useState(null)
   const [simulando, setSimulando] = useState(false)
 
+  // Actualiza un parametro puntual manteniendo intactos los demas.
   const actualizarParametro = (key) => (value) => setParametros((prev) => ({ ...prev, [key]: value }))
 
+  // Ejecuta la simulacion con los parametros actuales y guarda el resultado.
   const manejarSimulacion = useCallback(() => {
     setSimulando(true)
     setTimeout(() => {
@@ -587,13 +623,18 @@ export default function Aplicacion() {
     }, 0)
   }, [parametros])
 
+  // Selecciona primera fila, rango pedido por hora/cantidad y ultima fila de simulacion.
   const filasVisibles = useMemo(() => {
     if (!resultadoSimulacion) return []
 
     const primera = resultadoSimulacion.filas[0]
     const ultima = resultadoSimulacion.filas[resultadoSimulacion.filas.length - 1]
     const indiceInicio = resultadoSimulacion.filas.findIndex((fila) => fila.valores[COL.RELOJ] >= parametros.horaInicio)
+
+    // Toma las i filas solicitadas a partir de la hora j indicada por el usuario.
     const seleccion = indiceInicio >= 0 ? resultadoSimulacion.filas.slice(indiceInicio, indiceInicio + parametros.cantFilas) : []
+
+    // Evita repetir filas cuando la primera, el rango y la ultima se superponen.
     const filasSinRepetir = new Map()
 
     ;[primera, ...seleccion, ultima].forEach((fila) => {
@@ -603,11 +644,15 @@ export default function Aplicacion() {
     return Array.from(filasSinRepetir.values()).sort((a, b) => a.id - b.id)
   }, [resultadoSimulacion, parametros.horaInicio, parametros.cantFilas])
 
+  // Calcula cuantos pares de columnas de lotes hacen falta para las filas visibles.
   const cantidadLotesVisible = useMemo(() => {
     return filasVisibles.reduce((maximo, fila) => Math.max(maximo, Math.ceil((fila.valores.length - CANT_COLUMNAS_FIJAS) / 2)), 0)
   }, [filasVisibles])
 
+  // Arma las columnas dinamicas de lotes que se agregan al final del vector.
   const columnasLotes = useMemo(() => construirColumnasLotes(cantidadLotesVisible), [cantidadLotesVisible])
+
+  // Une las columnas fijas del vector con las columnas dinamicas de lotes.
   const columnas = useMemo(() => [...COLUMNAS_VECTOR, ...columnasLotes], [columnasLotes])
   const idUltimaFila = filasVisibles[filasVisibles.length - 1]?.id
 
