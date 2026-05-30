@@ -96,6 +96,139 @@ body {
   padding: 24px;
 }
 
+.content-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 160px);
+  min-height: 0;
+}
+
+.table-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.table-scroll {
+  min-height: 520px;
+  max-height: 520px;
+  overflow: auto;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.charts-section {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.chart-card {
+  background: rgba(22, 29, 47, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
+  padding: 16px;
+  min-height: 180px;
+}
+
+.chart-card .recharts-wrapper {
+  min-height: 120px;
+}
+
+.chart-card .recharts-wrapper {
+  min-height: 90px;
+}
+
+.chart-title {
+  margin-bottom: 18px;
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.chart-label {
+  margin-top: 14px;
+  text-align: center;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.side-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.export-button,
+.run-button {
+  padding: 12px 20px;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: #081220;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.export-button {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.export-button:disabled,
+.run-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.side-panel .stats-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.vtable thead th {
+  position: sticky;
+  top: 0;
+  background: rgba(22, 29, 47, 1);
+  color: var(--accent-strong);
+  z-index: 4;
+}
+
+.vtable thead .super-group-row th {
+  top: 0;
+  height: 28px;
+  text-align: center;
+  background: rgba(22, 29, 47, 1);
+}
+
+.vtable thead .group-row th {
+  top: 28px;
+  height: 34px;
+  text-align: center;
+  background: rgba(22, 29, 47, 1);
+  color: var(--text-muted);
+}
+
+.vtable thead .column-row th {
+  top: 62px;
+  min-width: 82px;
+}
+
+.vtable tbody tr.sticky-last-row {
+  position: sticky;
+  bottom: 0;
+  background: rgba(246, 178, 96, 0.16);
+  z-index: 2;
+}
+
+.vtable tbody tr.sticky-last-row td {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
 .panel-title,
 .section-title {
   display: block;
@@ -213,6 +346,20 @@ body {
   background: rgba(15, 20, 32, 0.98);
   color: var(--accent-strong);
   z-index: 3;
+}
+
+.vtable th.row-number-header,
+.vtable td.row-number-cell {
+  position: sticky;
+  left: 0;
+  text-align: center;
+  background: rgba(18, 26, 41, 1);
+  z-index: 5;
+}
+
+.vtable td.row-number-cell {
+  background: rgba(15, 20, 32, 0.96);
+  color: var(--text-muted);
 }
 
 .vtable thead .super-group-row th {
