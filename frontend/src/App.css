@@ -218,15 +218,18 @@ body {
   min-width: 82px;
 }
 
-.vtable tbody tr.sticky-last-row {
+.vtable tbody tr.final-row td {
   position: sticky;
   bottom: 0;
-  background: rgba(246, 178, 96, 0.16);
+  background: var(--bg-panel);
+  color: var(--accent-strong);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
   z-index: 2;
 }
 
-.vtable tbody tr.sticky-last-row td {
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+.vtable tbody tr.final-row td.row-number-cell {
+  left: 0;
+  z-index: 7;
 }
 
 .panel-title,
@@ -382,15 +385,18 @@ body {
   min-width: 82px;
 }
 
-.vtable tbody tr.sticky-last-row {
+.vtable tbody tr.final-row td {
   position: sticky;
   bottom: 0;
-  background: rgba(15, 20, 32, 0.98);
+  background: var(--bg-panel);
+  color: var(--accent-strong);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
   z-index: 2;
 }
 
-.vtable tbody tr.sticky-last-row td {
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+.vtable tbody tr.final-row td.row-number-cell {
+  left: 0;
+  z-index: 7;
 }
 
 .vtable td:first-child,

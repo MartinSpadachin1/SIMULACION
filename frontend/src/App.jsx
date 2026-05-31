@@ -31,29 +31,27 @@ const COL = Object.freeze({
   ESTADO_CINTA_1: 12,
   ESTADO_CINTA_2: 13,
   COLA_DESCARGA: 14,
-  COLA_EXPRESS: 15,
-  COLA_ESTANDAR: 16,
-  RND_LECTURA: 17,
-  RESULTADO_LECTURA: 18,
-  ESTADO_ESCANER: 17,
-  COLA_ESCANER: 18,
-  RND_ESCANEO: 19,
-  TIEMPO_ESCANEO: 20,
-  FIN_ESCANEO: 21,
-  RND_MANUAL: 22,
-  TIEMPO_MANUAL: 23,
-  FIN_MANUAL: 24,
-  ESTADO_OPERARIO: 25,
-  COLA_MANUAL: 26,
-  CONT_EXPRESS: 27,
-  AC_EXPRESS: 28,
-  CONT_ESTANDAR: 29,
-  AC_ESTANDAR: 30,
-  AC_TIEMPO_OPERARIO: 31,
-  MAX_COLA_DESCARGA: 32,
+  RND_LECTURA: 15,
+  RESULTADO_LECTURA: 16,
+  ESTADO_ESCANER: 15,
+  COLA_ESCANER: 16,
+  RND_ESCANEO: 17,
+  TIEMPO_ESCANEO: 18,
+  FIN_ESCANEO: 19,
+  RND_MANUAL: 20,
+  TIEMPO_MANUAL: 21,
+  FIN_MANUAL: 22,
+  ESTADO_OPERARIO: 23,
+  COLA_MANUAL: 24,
+  CONT_EXPRESS: 25,
+  AC_EXPRESS: 26,
+  CONT_ESTANDAR: 27,
+  AC_ESTANDAR: 28,
+  AC_TIEMPO_OPERARIO: 29,
+  MAX_COLA_DESCARGA: 30,
 })
 
-const CANT_COLUMNAS_FIJAS = 35
+const CANT_COLUMNAS_FIJAS = 33
 
 // Define los nombres visibles de cada columna fija del vector de estado.
 const COLUMNAS_VECTOR = [
@@ -72,8 +70,6 @@ const COLUMNAS_VECTOR = [
   'Estado',
   'Estado',
   'Cola',
-  'Cola Exp.',
-  'Cola Est.',
   'RND',
   'Resultado',
   'Estado',
@@ -100,15 +96,12 @@ const GRUPOS_VECTOR = [
   { label: 'llegada_camioneta_express', span: 3 },
   { label: 'llegada_camioneta_estandar', span: 3 },
   { label: 'fin_descarga_inicial(i)', span: 4 },
-  { label: 'Cinta descarga', span: 5 },
-  { label: 'Lectura', span: 4 },
-  { label: 'Escaner', span: 3 },
+  { label: 'Cinta descarga', span: 3 },
+  { label: 'Lectura / Escaner', span: 4 },
+  { label: 'fin_escaneo', span: 3 },
   { label: 'fin_procesamiento_manual', span: 3 },
   { label: 'Operario', span: 2 },
-  { label: '1.', span: 2 },
-  { label: '2.', span: 2 },
-  { label: '3.', span: 1 },
-  { label: '', span: 1 },
+  { label: '', span: 6 },
 ]
 
 // Formatea los valores que se muestran en la tabla del vector de estado.
@@ -121,6 +114,17 @@ function formatearNumero(valor) {
 function formatChartValue(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '-'
   return Number(value).toFixed(2)
+}
+
+function calcularTicksEje(tiempoTotal, cantTicks = 8) {
+  const intervalo = Math.ceil(tiempoTotal / cantTicks / 10) * 10
+  return Array.from({ length: Math.floor(tiempoTotal / intervalo) + 1 }, (_, i) => i * intervalo)
+}
+
+function calcularTicksY(maxValor, cantTicks = 6) {
+  if (!maxValor || maxValor === 0) return [0]
+  const intervalo = Math.ceil(maxValor / cantTicks / 5) * 5
+  return Array.from({ length: Math.floor(maxValor / intervalo) + 2 }, (_, i) => i * intervalo)
 }
 
 // Construye las columnas dinamicas de lotes activos: Estado y Tiempo entrada por cada lote.
@@ -217,13 +221,8 @@ export default function Aplicacion() {
 
   // Selecciona primera fila, rango pedido por hora/cantidad y ultima fila de simulacion.
   const filasVisibles = useMemo(() => {
-    if (!resultadoSimulacion) return []
-
-    const indiceInicio = resultadoSimulacion.filas.findIndex((fila) => fila.valores[COL.RELOJ] >= parametros.horaInicio)
-    if (indiceInicio < 0) return []
-
-    return resultadoSimulacion.filas.slice(indiceInicio, indiceInicio + parametros.cantFilas)
-  }, [resultadoSimulacion, parametros.horaInicio, parametros.cantFilas])
+    return resultadoSimulacion?.filas ?? []
+  }, [resultadoSimulacion])
 
   // Calcula cuantos pares de columnas de lotes hacen falta para las filas visibles.
   const cantidadLotesVisible = useMemo(() => {
@@ -235,38 +234,28 @@ export default function Aplicacion() {
 
   // Une las columnas fijas del vector con las columnas dinamicas de lotes.
   const columnas = useMemo(() => [...COLUMNAS_VECTOR, ...columnasLotes], [columnasLotes])
-  const idUltimaFila = filasVisibles[filasVisibles.length - 1]?.id
 
-  const promedioPermanenciaData = useMemo(() => {
-    if (!resultadoSimulacion) return []
-    return resultadoSimulacion.filas.map((fila) => {
-      const expressCount = Number(fila.valores[COL.CONT_EXPRESS]) || 0
-      const estandarCount = Number(fila.valores[COL.CONT_ESTANDAR]) || 0
-      const expressAvg = expressCount ? Number(fila.valores[COL.AC_EXPRESS]) / expressCount : 0
-      const estandarAvg = estandarCount ? Number(fila.valores[COL.AC_ESTANDAR]) / estandarCount : 0
-      return {
-        reloj: Number(fila.valores[COL.RELOJ]) || 0,
-        express: Number(expressAvg.toFixed(2)) || 0,
-        estandar: Number(estandarAvg.toFixed(2)) || 0,
-      }
-    })
+  const tiempoTotal = resultadoSimulacion?.resumen?.tiempoTotal ?? 0
+  const ticksEjeX = useMemo(() => calcularTicksEje(tiempoTotal), [tiempoTotal])
+
+  const ticksEjeYPermanencia = useMemo(() => {
+    const datos = resultadoSimulacion?.datosGraficos?.permanencia ?? []
+    const maxPermanencia = datos.length
+      ? Math.max(...datos.map((d) => Math.max(d.express, d.estandar)))
+      : 0
+    return calcularTicksY(maxPermanencia)
   }, [resultadoSimulacion])
 
-  const ocupacionOperarioData = useMemo(() => {
-    if (!resultadoSimulacion) return []
-    return resultadoSimulacion.filas.map((fila) => ({
-      reloj: Number(fila.valores[COL.RELOJ]) || 0,
-      ocupacionAcumulada: Number(fila.valores[COL.AC_TIEMPO_OPERARIO]) || 0,
-    }))
+  const ticksEjeYOperario = useMemo(() => {
+    const datos = resultadoSimulacion?.datosGraficos?.operario ?? []
+    const maxOperario = datos.length ? Math.max(...datos.map((d) => d.ocupacionAcumulada)) : 0
+    return calcularTicksY(maxOperario)
   }, [resultadoSimulacion])
 
-  const colaTimelineData = useMemo(() => {
-    if (!resultadoSimulacion) return []
-    return resultadoSimulacion.filas.map((fila) => ({
-      reloj: Number(fila.valores[COL.RELOJ]) || 0,
-      express: Number(fila.valores[COL.COLA_EXPRESS]) || 0,
-      estandar: Number(fila.valores[COL.COLA_ESTANDAR]) || 0,
-    }))
+  const ticksEjeYCola = useMemo(() => {
+    const datos = resultadoSimulacion?.datosGraficos?.cola ?? []
+    const maxCola = datos.length ? Math.max(...datos.map((d) => d.cola)) : 0
+    return calcularTicksY(maxCola)
   }, [resultadoSimulacion])
 
   const exportarCsv = useCallback(() => {
@@ -413,7 +402,7 @@ export default function Aplicacion() {
                     </thead>
                     <tbody>
                       {filasVisibles.map((fila) => (
-                        <tr key={fila.id} className={fila.id === idUltimaFila ? 'sticky-last-row' : ''}>
+                        <tr key={fila.id} className={fila.esFinal ? 'final-row' : ''}>
                           <td className="row-number-cell">{fila.id}</td>
                           {columnas.map((_, index) => (
                             <td key={`${fila.id}-${index}`}>{formatearNumero(fila.valores[index])}</td>
@@ -430,10 +419,10 @@ export default function Aplicacion() {
                 <div className="chart-card">
                   <div className="chart-title">Promedio de tiempo en sistema por tipo de lote</div>
                   <ResponsiveContainer width="100%" height={150}>
-                    <LineChart data={promedioPermanenciaData} margin={{ top: 8, right: 16, left: 8, bottom: 4 }}>
+                    <LineChart data={resultadoSimulacion.datosGraficos.permanencia} margin={{ top: 8, right: 16, left: 8, bottom: 4 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                      <XAxis dataKey="reloj" tick={{ fill: 'var(--text-muted)' }} stroke="rgba(255,255,255,0.18)" tickFormatter={(value) => Number(value).toFixed(0)} tickCount={6} />
-                      <YAxis tick={{ fill: 'var(--text-muted)' }} stroke="rgba(255,255,255,0.18)" tickFormatter={formatChartValue} tickCount={6} domain={[0, 'auto']} />
+                      <XAxis type="number" dataKey="reloj" domain={[0, tiempoTotal]} ticks={ticksEjeX} tick={{ fill: 'var(--text-muted)' }} stroke="rgba(255,255,255,0.18)" tickFormatter={(value) => Number(value).toFixed(0)} />
+                      <YAxis ticks={ticksEjeYPermanencia} tick={{ fill: 'var(--text-muted)' }} stroke="rgba(255,255,255,0.18)" tickFormatter={formatChartValue} domain={[0, 'auto']} />
                       <Tooltip wrapperStyle={{ backgroundColor: 'rgba(15,20,32,0.96)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--text)' }} formatter={(value) => [formatChartValue(value), 'Minutos']} />
                       <Legend wrapperStyle={{ color: 'var(--text)' }} />
                       <Line type="monotone" dataKey="express" stroke="var(--accent)" dot={false} strokeWidth={2} />
@@ -445,10 +434,10 @@ export default function Aplicacion() {
                 <div className="chart-card">
                   <div className="chart-title">Tiempo acumulado de uso del operario</div>
                   <ResponsiveContainer width="100%" height={130}>
-                    <LineChart data={ocupacionOperarioData} margin={{ top: 8, right: 16, left: 8, bottom: 4 }}>
+                    <LineChart data={resultadoSimulacion.datosGraficos.operario} margin={{ top: 8, right: 16, left: 8, bottom: 4 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                      <XAxis dataKey="reloj" tick={{ fill: 'var(--text-muted)' }} stroke="rgba(255,255,255,0.18)" tickFormatter={(value) => Number(value).toFixed(0)} tickCount={6} />
-                      <YAxis tick={{ fill: 'var(--text-muted)' }} stroke="rgba(255,255,255,0.18)" tickFormatter={formatChartValue} tickCount={6} domain={[0, 'auto']} />
+                      <XAxis type="number" dataKey="reloj" domain={[0, tiempoTotal]} ticks={ticksEjeX} tick={{ fill: 'var(--text-muted)' }} stroke="rgba(255,255,255,0.18)" tickFormatter={(value) => Number(value).toFixed(0)} />
+                      <YAxis ticks={ticksEjeYOperario} tick={{ fill: 'var(--text-muted)' }} stroke="rgba(255,255,255,0.18)" tickFormatter={formatChartValue} domain={[0, 'auto']} />
                       <Tooltip wrapperStyle={{ backgroundColor: 'rgba(15,20,32,0.96)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--text)' }} formatter={(value) => [formatChartValue(value), 'Minutos']} />
                       <Line type="monotone" dataKey="ocupacionAcumulada" stroke="var(--success)" dot={false} strokeWidth={2} />
                     </LineChart>
@@ -456,16 +445,14 @@ export default function Aplicacion() {
                 </div>
 
                 <div className="chart-card">
-                  <div className="chart-title">Cantidad de camiones en cola por tipo</div>
+                  <div className="chart-title">Camionetas en cola de descarga</div>
                   <ResponsiveContainer width="100%" height={150}>
-                    <LineChart data={colaTimelineData} margin={{ top: 8, right: 16, left: 8, bottom: 4 }}>
+                    <LineChart data={resultadoSimulacion.datosGraficos.cola} margin={{ top: 8, right: 16, left: 8, bottom: 4 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                      <XAxis dataKey="reloj" tick={{ fill: 'var(--text-muted)' }} stroke="rgba(255,255,255,0.18)" tickFormatter={(value) => Number(value).toFixed(0)} tickCount={6} />
-                      <YAxis tick={{ fill: 'var(--text-muted)' }} stroke="rgba(255,255,255,0.18)" tickFormatter={(value) => Number(value).toFixed(0)} tickCount={6} domain={[0, 'auto']} />
-                      <Tooltip wrapperStyle={{ backgroundColor: 'rgba(15,20,32,0.96)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--text)' }} formatter={(value, name) => [`${Number(value).toFixed(0)}`, name === 'express' ? 'Express' : 'Estandar']} />
-                      <Legend wrapperStyle={{ color: 'var(--text)' }} />
-                      <Line type="monotone" dataKey="express" stroke="var(--accent)" dot={false} strokeWidth={2} />
-                      <Line type="monotone" dataKey="estandar" stroke="var(--success)" dot={false} strokeWidth={2} />
+                      <XAxis type="number" dataKey="reloj" domain={[0, tiempoTotal]} ticks={ticksEjeX} tick={{ fill: 'var(--text-muted)' }} stroke="rgba(255,255,255,0.18)" tickFormatter={(value) => Number(value).toFixed(0)} />
+                      <YAxis ticks={ticksEjeYCola} tick={{ fill: 'var(--text-muted)' }} stroke="rgba(255,255,255,0.18)" tickFormatter={(value) => Number(value).toFixed(0)} allowDecimals={false} domain={[0, 'auto']} />
+                      <Tooltip wrapperStyle={{ backgroundColor: 'rgba(15,20,32,0.96)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--text)' }} formatter={(value) => [`${Number(value).toFixed(0)}`, 'Cola']} />
+                      <Line type="monotone" dataKey="cola" stroke="var(--accent)" dot={false} strokeWidth={2} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>

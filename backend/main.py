@@ -1,3 +1,10 @@
+"""
+Motor de simulación por eventos discretos — Expreso Norte (TP4).
+
+Expone una API REST que ejecuta la simulación, arma el vector de estado,
+filtra filas para la tabla y pre-calcula series para gráficos.
+"""
+
 import math
 import random
 from typing import Any, Dict, List, Optional
@@ -5,6 +12,11 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+
+# =============================================================================
+# Aplicación FastAPI y CORS
+# =============================================================================
 
 app = FastAPI()
 
@@ -16,7 +28,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# =============================================================================
+# Esquemas de entrada (Pydantic)
+# =============================================================================
+
+
 class SimulacionParametros(BaseModel):
+    """Parámetros estocásticos y límites de la corrida."""
+
     tiempoMax: float
     maxIter: int
     mediaExpress: float
@@ -29,50 +49,156 @@ class SimulacionParametros(BaseModel):
     manualVar: float
     pRechazo: float
 
+
 class SimularRequest(BaseModel):
+    """Cuerpo del POST /api/simular."""
+
     parametros: SimulacionParametros
-    horaInicio: float
-    cantFilas: int
+    horaInicio: float  # minuto de reloj desde el cual incluir filas en la tabla
+    cantFilas: int  # cantidad máxima de filas de eventos (sin contar la fila final)
+
+
+# =============================================================================
+# Vector de estado — columnas fijas (índices 0..32, alineados con el Excel)
+# =============================================================================
+
+CANT_COLUMNAS_FIJAS = 33
+
+COL = {
+    "EVENTO": 0,
+    "RELOJ": 1,
+    "RND_EXPRESS": 2,
+    "TIEMPO_EXPRESS": 3,
+    "PROX_EXPRESS": 4,
+    "RND_ESTANDAR": 5,
+    "TIEMPO_ESTANDAR": 6,
+    "PROX_ESTANDAR": 7,
+    "RND_DESCARGA": 8,
+    "TIEMPO_DESCARGA": 9,
+    "FIN_DESCARGA_CINTA_1": 10,
+    "FIN_DESCARGA_CINTA_2": 11,
+    "ESTADO_CINTA_1": 12,
+    "ESTADO_CINTA_2": 13,
+    "COLA_DESCARGA": 14,
+    "RND_LECTURA": 15,
+    "RESULTADO_LECTURA": 16,
+    "ESTADO_ESCANER": 15,  # comparte índice con RND_LECTURA (según tipo de evento)
+    "COLA_ESCANER": 16,  # comparte índice con RESULTADO_LECTURA
+    "RND_ESCANEO": 17,
+    "TIEMPO_ESCANEO": 18,
+    "FIN_ESCANEO": 19,
+    "RND_MANUAL": 20,
+    "TIEMPO_MANUAL": 21,
+    "FIN_MANUAL": 22,
+    "ESTADO_OPERARIO": 23,
+    "COLA_MANUAL": 24,
+    "CONT_EXPRESS": 25,
+    "AC_EXPRESS": 26,
+    "CONT_ESTANDAR": 27,
+    "AC_ESTANDAR": 28,
+    "AC_TIEMPO_OPERARIO": 29,
+    "MAX_COLA_DESCARGA": 30,
+}
+
+# Columnas que se vacían en cada nuevo evento (solo persisten RND/tiempo del evento actual)
+COLUMNAS_TRANSITORIAS = [
+    COL["RND_EXPRESS"],
+    COL["TIEMPO_EXPRESS"],
+    COL["RND_ESTANDAR"],
+    COL["TIEMPO_ESTANDAR"],
+    COL["RND_DESCARGA"],
+    COL["TIEMPO_DESCARGA"],
+    COL["RND_LECTURA"],
+    COL["RESULTADO_LECTURA"],
+    COL["RND_ESCANEO"],
+    COL["TIEMPO_ESCANEO"],
+    COL["RND_MANUAL"],
+    COL["TIEMPO_MANUAL"],
+]
+
+
+# =============================================================================
+# Endpoints
+# =============================================================================
+
 
 @app.get("/")
 def read_root() -> Dict[str, str]:
+    """Comprobación de que el servidor está activo."""
     return {"message": "Backend funcionando"}
+
 
 @app.post("/api/simular")
 def simular(request: SimularRequest) -> Dict[str, Any]:
+    """
+    Ejecuta una corrida completa de simulación y devuelve:
+    - filas: subconjunto para la tabla (filtrado por horaInicio / cantFilas + fila final)
+    - datosGraficos: series temporales de toda la simulación
+    - resumen: indicadores globales al cierre
+    """
     parametros = request.parametros
     hora_inicio = request.horaInicio
     cant_filas = request.cantFilas
 
+    # -------------------------------------------------------------------------
+    # Utilidades: números aleatorios y validación
+    # -------------------------------------------------------------------------
+
     def limpiar_probabilidad(valor: float) -> float:
+        """Acota pRechazo al intervalo [0, 1] y evita NaN."""
         if not isinstance(valor, (int, float)) or math.isnan(valor):
             return 0.0
         return min(1.0, max(0.0, float(valor)))
 
     def aleatorio_exponencial(media: float) -> Dict[str, float]:
+        """Tiempo entre arribos (llegadas Express / Estándar)."""
         rnd = random.random()
         return {"rnd": rnd, "tiempo": -media * math.log(1 - rnd)}
 
     def aleatorio_uniforme(minimo: float, maximo: float) -> Dict[str, float]:
+        """Duración de descarga, escaneo o procesamiento manual."""
         rnd = random.random()
         return {"rnd": rnd, "tiempo": minimo + rnd * (maximo - minimo)}
 
-    def crear_servidor() -> Dict[str, Optional[float]]:
-        return {"estado": "Libre", "fin": None, "loteId": None, "inicioOcupacion": None}
+    def tiempo_evento(valor: Optional[float]) -> float:
+        """Convierte None (evento no programado) en +inf para excluirlo del calendario."""
+        return float("inf") if valor is None else valor
+
+    # -------------------------------------------------------------------------
+    # Vector de estado: creación y escritura
+    # -------------------------------------------------------------------------
 
     def crear_fila_vacia() -> List[Any]:
+        """Lista de 33 celdas vacías (columnas fijas)."""
         return [""] * CANT_COLUMNAS_FIJAS
 
     def preparar_fila_desde_anterior(fila_anterior: List[Any]) -> List[Any]:
+        """
+        Copia el estado persistente de la fila anterior y limpia columnas transitorias.
+        Patrón doble fila: evita clonar todo el vector en cada evento.
+        """
         fila = fila_anterior[:CANT_COLUMNAS_FIJAS]
         for columna in COLUMNAS_TRANSITORIAS:
             fila[columna] = ""
         return fila
 
-    def tiempo_evento(valor: Optional[float]) -> float:
-        return float("inf") if valor is None else valor
+    def crear_fila_actual(evento: str, reloj_evento: float) -> List[Any]:
+        """Rota vector_estado[0/1] y registra evento + reloj del instante actual."""
+        vector_estado[0] = vector_estado[1]
+        vector_estado[1] = preparar_fila_desde_anterior(vector_estado[0])
+        vector_estado[1][COL["EVENTO"]] = evento
+        vector_estado[1][COL["RELOJ"]] = reloj_evento
+        return vector_estado[1]
 
-    def escribir_estado_general(fila: List[Any], incluir_lotes: bool = True, ac_operario_forzado: Optional[float] = None) -> None:
+    def escribir_estado_general(
+        fila: List[Any],
+        incluir_lotes: bool = True,
+        ac_operario_forzado: Optional[float] = None,
+    ) -> None:
+        """
+        Vuelca el estado del modelo (sistema) sobre las columnas fijas del vector.
+        Si incluir_lotes, agrega al final pares [estado, tiempoEntrada] por lote activo.
+        """
         fila[COL["PROX_EXPRESS"]] = sistema["proximaExpress"]
         fila[COL["PROX_ESTANDAR"]] = sistema["proximaEstandar"]
         fila[COL["FIN_DESCARGA_CINTA_1"]] = sistema["cinta1"]["fin"]
@@ -80,8 +206,6 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
         fila[COL["ESTADO_CINTA_1"]] = sistema["cinta1"]["estado"]
         fila[COL["ESTADO_CINTA_2"]] = sistema["cinta2"]["estado"]
         fila[COL["COLA_DESCARGA"]] = len(sistema["colaDescarga"])
-        fila[COL["COLA_EXPRESS"]] = sum(1 for lote_id in sistema["colaDescarga"] if sistema["lotesActivos"][lote_id]["tipo"] == "Express")
-        fila[COL["COLA_ESTANDAR"]] = sum(1 for lote_id in sistema["colaDescarga"] if sistema["lotesActivos"][lote_id]["tipo"] == "Estandar")
         fila[COL["ESTADO_ESCANER"]] = sistema["escaner"]["estado"]
         fila[COL["COLA_ESCANER"]] = len(sistema["colaEscaner"])
         fila[COL["FIN_ESCANEO"]] = sistema["escaner"]["fin"]
@@ -92,7 +216,9 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
         fila[COL["AC_EXPRESS"]] = sistema["acTiempoExpress"]
         fila[COL["CONT_ESTANDAR"]] = sistema["contEstandarTerminados"]
         fila[COL["AC_ESTANDAR"]] = sistema["acTiempoEstandar"]
-        fila[COL["AC_TIEMPO_OPERARIO"]] = ac_operario_forzado if ac_operario_forzado is not None else sistema["acTiempoOperario"]
+        fila[COL["AC_TIEMPO_OPERARIO"]] = (
+            ac_operario_forzado if ac_operario_forzado is not None else sistema["acTiempoOperario"]
+        )
         fila[COL["MAX_COLA_DESCARGA"]] = sistema["maxColaDescarga"]
 
         if not incluir_lotes:
@@ -104,19 +230,16 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
             fila.append(lote["estado"])
             fila.append(lote["tiempoEntrada"])
 
-    def programar_llegada_express(fila: List[Any]) -> None:
-        llegada = aleatorio_exponencial(parametros.mediaExpress)
-        sistema["proximaExpress"] = sistema["reloj"] + llegada["tiempo"]
-        fila[COL["RND_EXPRESS"]] = llegada["rnd"]
-        fila[COL["TIEMPO_EXPRESS"]] = llegada["tiempo"]
+    # -------------------------------------------------------------------------
+    # Recursos del modelo (servidores, colas, lotes)
+    # -------------------------------------------------------------------------
 
-    def programar_llegada_estandar(fila: List[Any]) -> None:
-        llegada = aleatorio_exponencial(parametros.mediaEstandar)
-        sistema["proximaEstandar"] = sistema["reloj"] + llegada["tiempo"]
-        fila[COL["RND_ESTANDAR"]] = llegada["rnd"]
-        fila[COL["TIEMPO_ESTANDAR"]] = llegada["tiempo"]
+    def crear_servidor() -> Dict[str, Optional[float]]:
+        """Plantilla para cinta, escáner u operario: Libre/Ocupado + fin de servicio."""
+        return {"estado": "Libre", "fin": None, "loteId": None, "inicioOcupacion": None}
 
     def crear_lote(tipo: str) -> Dict[str, Any]:
+        """Alta de camioneta/lote al arribar; queda en lotesActivos hasta salir del sistema."""
         lote = {
             "id": sistema["proximoLoteId"],
             "tipo": tipo,
@@ -135,20 +258,58 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
 
         return lote
 
-    def encolar_descarga(lote: Dict[str, Any]) -> None:
-        lote["estado"] = "Esperando Descarga"
+    def finalizar_lote(lote_id: int) -> None:
+        """Lote sale del sistema: actualiza contadores/acumulados y lo quita de lotesActivos."""
+        lote = sistema["lotesActivos"].get(lote_id)
+        if lote is None:
+            return
+        tiempo_sistema = sistema["reloj"] - lote["horaLlegada"]
         if lote["tipo"] == "Express":
-            primer_estandar = next((index for index, lote_id in enumerate(sistema["colaDescarga"]) if sistema["lotesActivos"][lote_id]["tipo"] == "Estandar"), None)
-            if primer_estandar is None:
-                sistema["colaDescarga"].append(lote["id"])
-            else:
-                sistema["colaDescarga"].insert(primer_estandar, lote["id"])
+            sistema["contExpressTerminados"] += 1
+            sistema["acTiempoExpress"] += tiempo_sistema
         else:
-            sistema["colaDescarga"].append(lote["id"])
-        sistema["maxColaDescarga"] = max(sistema["maxColaDescarga"], len(sistema["colaDescarga"]))
+            sistema["contEstandarTerminados"] += 1
+            sistema["acTiempoEstandar"] += tiempo_sistema
+        sistema["lotesActivos"].pop(lote_id, None)
 
-    def asignar_descarga(lote_id: int, fila: List[Any], cinta_preferida: Optional[Dict[str, Any]] = None) -> bool:
-        cinta = cinta_preferida if cinta_preferida and cinta_preferida["estado"] == "Libre" else obtener_cinta_libre()
+    # -------------------------------------------------------------------------
+    # Llegadas (programación del próximo arribo)
+    # -------------------------------------------------------------------------
+
+    def programar_llegada_express(fila: List[Any]) -> None:
+        llegada = aleatorio_exponencial(parametros.mediaExpress)
+        sistema["proximaExpress"] = sistema["reloj"] + llegada["tiempo"]
+        fila[COL["RND_EXPRESS"]] = llegada["rnd"]
+        fila[COL["TIEMPO_EXPRESS"]] = llegada["tiempo"]
+
+    def programar_llegada_estandar(fila: List[Any]) -> None:
+        llegada = aleatorio_exponencial(parametros.mediaEstandar)
+        sistema["proximaEstandar"] = sistema["reloj"] + llegada["tiempo"]
+        fila[COL["RND_ESTANDAR"]] = llegada["rnd"]
+        fila[COL["TIEMPO_ESTANDAR"]] = llegada["tiempo"]
+
+    # -------------------------------------------------------------------------
+    # Descarga (dos cintas, una sola cola con prioridad Express)
+    # -------------------------------------------------------------------------
+
+    def obtener_cinta_libre() -> Optional[Dict[str, Any]]:
+        if sistema["cinta1"]["estado"] == "Libre":
+            return sistema["cinta1"]
+        if sistema["cinta2"]["estado"] == "Libre":
+            return sistema["cinta2"]
+        return None
+
+    def asignar_descarga(
+        lote_id: int,
+        fila: List[Any],
+        cinta_preferida: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Inicia descarga si hay cinta libre. Devuelve False si el lote debe encolarse."""
+        cinta = (
+            cinta_preferida
+            if cinta_preferida and cinta_preferida["estado"] == "Libre"
+            else obtener_cinta_libre()
+        )
         lote = sistema["lotesActivos"].get(lote_id)
         if cinta is None or lote is None:
             return False
@@ -164,18 +325,38 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
         fila[COL["TIEMPO_DESCARGA"]] = descarga["tiempo"]
         return True
 
-    def obtener_cinta_libre() -> Optional[Dict[str, Any]]:
-        if sistema["cinta1"]["estado"] == "Libre":
-            return sistema["cinta1"]
-        if sistema["cinta2"]["estado"] == "Libre":
-            return sistema["cinta2"]
-        return None
+    def encolar_descarga(lote: Dict[str, Any]) -> None:
+        """
+        Cola única de descarga. Express se inserta antes del primer Estándar en cola.
+        """
+        lote["estado"] = "Esperando Descarga"
+        if lote["tipo"] == "Express":
+            primer_estandar = next(
+                (
+                    index
+                    for index, lote_id in enumerate(sistema["colaDescarga"])
+                    if sistema["lotesActivos"][lote_id]["tipo"] == "Estandar"
+                ),
+                None,
+            )
+            if primer_estandar is None:
+                sistema["colaDescarga"].append(lote["id"])
+            else:
+                sistema["colaDescarga"].insert(primer_estandar, lote["id"])
+        else:
+            sistema["colaDescarga"].append(lote["id"])
+        sistema["maxColaDescarga"] = max(sistema["maxColaDescarga"], len(sistema["colaDescarga"]))
 
     def tomar_siguiente_descarga(fila: List[Any], cinta_liberada: Dict[str, Any]) -> None:
+        """Al liberarse una cinta, asigna el siguiente de la cola (FIFO con prioridad ya aplicada)."""
         if not sistema["colaDescarga"]:
             return
         lote_id = sistema["colaDescarga"].pop(0)
         asignar_descarga(lote_id, fila, cinta_liberada)
+
+    # -------------------------------------------------------------------------
+    # Escáner y operario (procesamiento manual si rechazo post-escaneo)
+    # -------------------------------------------------------------------------
 
     def iniciar_escaner_si_puede(fila: List[Any]) -> None:
         if sistema["escaner"]["estado"] != "Libre" or not sistema["colaEscaner"]:
@@ -208,20 +389,19 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
         fila[COL["RND_MANUAL"]] = proceso_manual["rnd"]
         fila[COL["TIEMPO_MANUAL"]] = proceso_manual["tiempo"]
 
-    def finalizar_lote(lote_id: int) -> None:
-        lote = sistema["lotesActivos"].get(lote_id)
-        if lote is None:
-            return
-        tiempo_sistema = sistema["reloj"] - lote["horaLlegada"]
-        if lote["tipo"] == "Express":
-            sistema["contExpressTerminados"] += 1
-            sistema["acTiempoExpress"] += tiempo_sistema
-        else:
-            sistema["contEstandarTerminados"] += 1
-            sistema["acTiempoEstandar"] += tiempo_sistema
-        sistema["lotesActivos"].pop(lote_id, None)
+    def tiempo_operario_hasta(tiempo_final: float) -> float:
+        """Proyecta tiempo ocupado del operario hasta tiempoMax (fila de cierre)."""
+        if sistema["operario"]["estado"] != "Ocupado":
+            return sistema["acTiempoOperario"]
+        inicio = sistema["operario"]["inicioOcupacion"] or sistema["reloj"]
+        return sistema["acTiempoOperario"] + max(0.0, tiempo_final - inicio)
+
+    # -------------------------------------------------------------------------
+    # Calendario de eventos discretos
+    # -------------------------------------------------------------------------
 
     def elegir_proximo_evento() -> Optional[Dict[str, Any]]:
+        """Avanza el reloj al evento con menor tiempo; en empate, gana menor prioridad numérica."""
         candidatos = [
             {"tipo": "llegada_camioneta_express", "tiempo": tiempo_evento(sistema["proximaExpress"]), "prioridad": 1},
             {"tipo": "llegada_camioneta_estandar", "tiempo": tiempo_evento(sistema["proximaEstandar"]), "prioridad": 2},
@@ -236,30 +416,27 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
         candidatos.sort(key=lambda evento: (evento["tiempo"], evento["prioridad"]))
         return candidatos[0]
 
-    def crear_fila_actual(evento: str, reloj_evento: float) -> List[Any]:
-        vector_estado[0] = vector_estado[1]
-        vector_estado[1] = preparar_fila_desde_anterior(vector_estado[0])
-        vector_estado[1][COL["EVENTO"]] = evento
-        vector_estado[1][COL["RELOJ"]] = reloj_evento
-        return vector_estado[1]
+    # -------------------------------------------------------------------------
+    # Persistencia de filas (tabla vs historial completo para gráficos)
+    # -------------------------------------------------------------------------
 
     filas_guardadas_desde_inicio = 0
-    fila_numero_global = 0
-
-    def tiempo_operario_hasta(tiempo_final: float) -> float:
-        if sistema["operario"]["estado"] != "Ocupado":
-            return sistema["acTiempoOperario"]
-        inicio = sistema["operario"]["inicioOcupacion"] or sistema["reloj"]
-        return sistema["acTiempoOperario"] + max(0.0, tiempo_final - inicio)
 
     def guardar_fila(fila: List[Any], es_final: bool = False) -> None:
-        nonlocal filas_guardadas_desde_inicio, fila_numero_global
-        fila_numero_global += 1
+        """
+        - todas_las_filas: cada instante guardado (para datosGraficos).
+        - filas_guardadas: subconjunto para el front (filtro horaInicio/cantFilas + fila final).
+        id / iteracion = número de iteración en la simulación completa.
+        """
+        nonlocal filas_guardadas_desde_inicio
+        todas_las_filas.append({"valores": fila.copy()})
         reloj = fila[COL["RELOJ"]]
-        if fila[COL["EVENTO"]] == "Inicializacion" or es_final:
+
+        if es_final:
             filas_guardadas.append({
-                "id": fila_numero_global,
+                "id": iteracion,
                 "iteracion": iteracion,
+                "esFinal": True,
                 "valores": fila.copy(),
             })
             return
@@ -269,70 +446,14 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
 
         filas_guardadas_desde_inicio += 1
         filas_guardadas.append({
-            "id": fila_numero_global,
+            "id": iteracion,
             "iteracion": iteracion,
             "valores": fila.copy(),
         })
 
-    def max_lotes_activos() -> int:
-        maximo = 0
-        for fila in filas_guardadas:
-            lotes = max(0, (len(fila["valores"]) - CANT_COLUMNAS_FIJAS) // 2)
-            maximo = max(maximo, lotes)
-        return maximo
-
-    CANT_COLUMNAS_FIJAS = 35
-    COL = {
-        "EVENTO": 0,
-        "RELOJ": 1,
-        "RND_EXPRESS": 2,
-        "TIEMPO_EXPRESS": 3,
-        "PROX_EXPRESS": 4,
-        "RND_ESTANDAR": 5,
-        "TIEMPO_ESTANDAR": 6,
-        "PROX_ESTANDAR": 7,
-        "RND_DESCARGA": 8,
-        "TIEMPO_DESCARGA": 9,
-        "FIN_DESCARGA_CINTA_1": 10,
-        "FIN_DESCARGA_CINTA_2": 11,
-        "ESTADO_CINTA_1": 12,
-        "ESTADO_CINTA_2": 13,
-        "COLA_DESCARGA": 14,
-        "COLA_EXPRESS": 15,
-        "COLA_ESTANDAR": 16,
-        "RND_LECTURA": 17,
-        "RESULTADO_LECTURA": 18,
-        "ESTADO_ESCANER": 17,
-        "COLA_ESCANER": 18,
-        "RND_ESCANEO": 19,
-        "TIEMPO_ESCANEO": 20,
-        "FIN_ESCANEO": 21,
-        "RND_MANUAL": 22,
-        "TIEMPO_MANUAL": 23,
-        "FIN_MANUAL": 24,
-        "ESTADO_OPERARIO": 25,
-        "COLA_MANUAL": 26,
-        "CONT_EXPRESS": 27,
-        "AC_EXPRESS": 28,
-        "CONT_ESTANDAR": 29,
-        "AC_ESTANDAR": 30,
-        "AC_TIEMPO_OPERARIO": 31,
-        "MAX_COLA_DESCARGA": 32,
-    }
-    COLUMNAS_TRANSITORIAS = [
-        COL["RND_EXPRESS"],
-        COL["TIEMPO_EXPRESS"],
-        COL["RND_ESTANDAR"],
-        COL["TIEMPO_ESTANDAR"],
-        COL["RND_DESCARGA"],
-        COL["TIEMPO_DESCARGA"],
-        COL["RND_LECTURA"],
-        COL["RESULTADO_LECTURA"],
-        COL["RND_ESCANEO"],
-        COL["TIEMPO_ESCANEO"],
-        COL["RND_MANUAL"],
-        COL["TIEMPO_MANUAL"],
-    ]
+    # -------------------------------------------------------------------------
+    # Parámetros derivados e inicialización del estado
+    # -------------------------------------------------------------------------
 
     limite_iteraciones = min(max(0, parametros.maxIter), 100000)
     probabilidad_rechazo = limpiar_probabilidad(parametros.pRechazo)
@@ -365,7 +486,12 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
 
     vector_estado = [crear_fila_vacia(), crear_fila_vacia()]
     filas_guardadas: List[Dict[str, Any]] = []
+    todas_las_filas: List[Dict[str, Any]] = []
     iteracion = 0
+
+    # -------------------------------------------------------------------------
+    # Fila de inicialización (reloj 0; solo se envía si horaInicio <= 0)
+    # -------------------------------------------------------------------------
 
     vector_estado[1][COL["EVENTO"]] = "Inicializacion"
     vector_estado[1][COL["RELOJ"]] = sistema["reloj"]
@@ -373,6 +499,10 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
     programar_llegada_estandar(vector_estado[1])
     escribir_estado_general(vector_estado[1])
     guardar_fila(vector_estado[1])
+
+    # -------------------------------------------------------------------------
+    # Bucle principal: procesar eventos hasta tiempoMax o sin candidatos
+    # -------------------------------------------------------------------------
 
     while iteracion < limite_iteraciones:
         evento = elegir_proximo_evento()
@@ -389,13 +519,13 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
             if not asignar_descarga(lote["id"], fila):
                 encolar_descarga(lote)
 
-        if evento["tipo"] == "llegada_camioneta_estandar":
+        elif evento["tipo"] == "llegada_camioneta_estandar":
             programar_llegada_estandar(fila)
             lote = crear_lote("Estandar")
             if not asignar_descarga(lote["id"], fila):
                 encolar_descarga(lote)
 
-        if evento["tipo"] in {"fin_descarga_cinta-1", "fin_descarga_cinta-2"}:
+        elif evento["tipo"] in {"fin_descarga_cinta-1", "fin_descarga_cinta-2"}:
             cinta = sistema["cinta1"] if evento["tipo"] == "fin_descarga_cinta-1" else sistema["cinta2"]
             lote_id = cinta["loteId"]
             lote = sistema["lotesActivos"].get(lote_id)
@@ -411,7 +541,7 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
             iniciar_escaner_si_puede(fila)
             tomar_siguiente_descarga(fila, cinta)
 
-        if evento["tipo"] == "fin_escaneo":
+        elif evento["tipo"] == "fin_escaneo":
             lote_id = sistema["escaner"]["loteId"]
             lote = sistema["lotesActivos"].get(lote_id)
             rnd_lectura = random.random()
@@ -433,7 +563,7 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
 
             iniciar_escaner_si_puede(fila)
 
-        if evento["tipo"] == "fin_procesamiento_manual":
+        elif evento["tipo"] == "fin_procesamiento_manual":
             lote_id = sistema["operario"]["loteId"]
             inicio = sistema["operario"]["inicioOcupacion"] or sistema["reloj"]
             sistema["acTiempoOperario"] += sistema["reloj"] - inicio
@@ -447,20 +577,70 @@ def simular(request: SimularRequest) -> Dict[str, Any]:
         escribir_estado_general(fila)
         guardar_fila(fila)
 
+    # -------------------------------------------------------------------------
+    # Fila de cierre (siempre incluida; sin columnas dinámicas de lotes)
+    # -------------------------------------------------------------------------
+
     tiempo_cierre = parametros.tiempoMax
     ac_operario_cierre = tiempo_operario_hasta(parametros.tiempoMax)
     sistema["reloj"] = parametros.tiempoMax
 
     fila_final = crear_fila_actual("fin_simulacion", parametros.tiempoMax)
-    escribir_estado_general(fila_final, incluir_lotes=False, ac_operario_forzado=ac_operario_cierre)
+    escribir_estado_general(
+        fila_final,
+        incluir_lotes=False,
+        ac_operario_forzado=ac_operario_cierre,
+    )
     guardar_fila(fila_final, es_final=True)
 
-    promedio_express = sistema["acTiempoExpress"] / sistema["contExpressTerminados"] if sistema["contExpressTerminados"] else 0.0
-    promedio_estandar = sistema["acTiempoEstandar"] / sistema["contEstandarTerminados"] if sistema["contEstandarTerminados"] else 0.0
+    # -------------------------------------------------------------------------
+    # Resumen global e indicadores para gráficos (toda la corrida)
+    # -------------------------------------------------------------------------
+
+    promedio_express = (
+        sistema["acTiempoExpress"] / sistema["contExpressTerminados"]
+        if sistema["contExpressTerminados"]
+        else 0.0
+    )
+    promedio_estandar = (
+        sistema["acTiempoEstandar"] / sistema["contEstandarTerminados"]
+        if sistema["contEstandarTerminados"]
+        else 0.0
+    )
     porcentaje_operario = (ac_operario_cierre / tiempo_cierre * 100.0) if tiempo_cierre else 0.0
+
+    datos_graficos = {
+        "permanencia": [],
+        "operario": [],
+        "cola": [],
+    }
+
+    for fila_guardada in todas_las_filas:
+        valores = fila_guardada["valores"]
+        reloj = valores[COL["RELOJ"]]
+
+        express_count = valores[COL["CONT_EXPRESS"]] or 0
+        estandar_count = valores[COL["CONT_ESTANDAR"]] or 0
+        ac_express = valores[COL["AC_EXPRESS"]] or 0
+        ac_estandar = valores[COL["AC_ESTANDAR"]] or 0
+
+        datos_graficos["permanencia"].append({
+            "reloj": reloj,
+            "express": round(ac_express / express_count, 2) if express_count else 0,
+            "estandar": round(ac_estandar / estandar_count, 2) if estandar_count else 0,
+        })
+        datos_graficos["operario"].append({
+            "reloj": reloj,
+            "ocupacionAcumulada": valores[COL["AC_TIEMPO_OPERARIO"]] or 0,
+        })
+        datos_graficos["cola"].append({
+            "reloj": reloj,
+            "cola": valores[COL["COLA_DESCARGA"]] or 0,
+        })
 
     return {
         "filas": filas_guardadas,
+        "datosGraficos": datos_graficos,
         "resumen": {
             "tiempoTotal": tiempo_cierre,
             "promExpress": promedio_express,
