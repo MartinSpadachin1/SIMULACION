@@ -62,7 +62,7 @@ class SimularRequest(BaseModel):
 # Vector de estado — columnas fijas (índices 0..32, alineados con el Excel)
 # =============================================================================
 
-CANT_COLUMNAS_FIJAS = 33
+CANT_COLUMNAS_FIJAS = 35
 
 COL = {
     "EVENTO": 0,
@@ -82,22 +82,22 @@ COL = {
     "COLA_DESCARGA": 14,
     "RND_LECTURA": 15,
     "RESULTADO_LECTURA": 16,
-    "ESTADO_ESCANER": 15,  # comparte índice con RND_LECTURA (según tipo de evento)
-    "COLA_ESCANER": 16,  # comparte índice con RESULTADO_LECTURA
-    "RND_ESCANEO": 17,
-    "TIEMPO_ESCANEO": 18,
-    "FIN_ESCANEO": 19,
-    "RND_MANUAL": 20,
-    "TIEMPO_MANUAL": 21,
-    "FIN_MANUAL": 22,
-    "ESTADO_OPERARIO": 23,
-    "COLA_MANUAL": 24,
-    "CONT_EXPRESS": 25,
-    "AC_EXPRESS": 26,
-    "CONT_ESTANDAR": 27,
-    "AC_ESTANDAR": 28,
-    "AC_TIEMPO_OPERARIO": 29,
-    "MAX_COLA_DESCARGA": 30,
+    "ESTADO_ESCANER": 17,
+    "COLA_ESCANER": 18,
+    "RND_ESCANEO": 19,
+    "TIEMPO_ESCANEO": 20,
+    "FIN_ESCANEO": 21,
+    "RND_MANUAL": 22,
+    "TIEMPO_MANUAL": 23,
+    "FIN_MANUAL": 24,
+    "ESTADO_OPERARIO": 25,
+    "COLA_MANUAL": 26,
+    "CONT_EXPRESS": 27,
+    "AC_EXPRESS": 28,
+    "CONT_ESTANDAR": 29,
+    "AC_ESTANDAR": 30,
+    "AC_TIEMPO_OPERARIO": 31,
+    "MAX_COLA_DESCARGA": 32,
 }
 
 # Columnas que se vacían en cada nuevo evento (solo persisten RND/tiempo del evento actual)

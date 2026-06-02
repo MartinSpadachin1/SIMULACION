@@ -33,25 +33,25 @@ const COL = Object.freeze({
   COLA_DESCARGA: 14,
   RND_LECTURA: 15,
   RESULTADO_LECTURA: 16,
-  ESTADO_ESCANER: 15,
-  COLA_ESCANER: 16,
-  RND_ESCANEO: 17,
-  TIEMPO_ESCANEO: 18,
-  FIN_ESCANEO: 19,
-  RND_MANUAL: 20,
-  TIEMPO_MANUAL: 21,
-  FIN_MANUAL: 22,
-  ESTADO_OPERARIO: 23,
-  COLA_MANUAL: 24,
-  CONT_EXPRESS: 25,
-  AC_EXPRESS: 26,
-  CONT_ESTANDAR: 27,
-  AC_ESTANDAR: 28,
-  AC_TIEMPO_OPERARIO: 29,
-  MAX_COLA_DESCARGA: 30,
+  ESTADO_ESCANER: 17,
+  COLA_ESCANER: 18,
+  RND_ESCANEO: 19,
+  TIEMPO_ESCANEO: 20,
+  FIN_ESCANEO: 21,
+  RND_MANUAL: 22,
+  TIEMPO_MANUAL: 23,
+  FIN_MANUAL: 24,
+  ESTADO_OPERARIO: 25,
+  COLA_MANUAL: 26,
+  CONT_EXPRESS: 27,
+  AC_EXPRESS: 28,
+  CONT_ESTANDAR: 29,
+  AC_ESTANDAR: 30,
+  AC_TIEMPO_OPERARIO: 31,
+  MAX_COLA_DESCARGA: 32,
 })
 
-const CANT_COLUMNAS_FIJAS = 33
+const CANT_COLUMNAS_FIJAS = 35
 
 // Define los nombres visibles de cada columna fija del vector de estado.
 const COLUMNAS_VECTOR = [
@@ -82,12 +82,12 @@ const COLUMNAS_VECTOR = [
   'fin_procesamiento_manual',
   'Estado',
   'Cola',
-  'Cont.',
-  'Ac.',
-  'Cont.',
-  'Ac.',
-  'Ac. Tiempo ocupado',
-  'Cant Max.',
+  'Cant. Express',
+  'Ac. Express',
+  'Cant. Estándar',
+  'Ac. Estándar',
+  'Ac. Operario',
+  'Max Cola',
 ]
 
 // Define los titulos agrupados que aparecen arriba de las columnas del vector.
@@ -101,7 +101,7 @@ const GRUPOS_VECTOR = [
   { label: 'fin_escaneo', span: 3 },
   { label: 'fin_procesamiento_manual', span: 3 },
   { label: 'Operario', span: 2 },
-  { label: '', span: 6 },
+  { label: 'Variables auxiliares', span: 6 },
 ]
 
 // Formatea los valores que se muestran en la tabla del vector de estado.
